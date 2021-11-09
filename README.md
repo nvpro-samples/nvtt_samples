@@ -1,6 +1,6 @@
 # NVTT 3 Samples
 
-This repository contains a number of samples showing how to use [NVTT 3](https://developer.nvidia.com/nvidia-texture-tools-exporter), a GPU-accelerated texture compression and image processing library.
+This repository contains a number of samples showing how to use [NVTT 3](https://developer.nvidia.com/gpu-accelerated-texture-compression), a GPU-accelerated texture compression and image processing library.
 
 This includes several small samples intended as tutorials:
 
@@ -26,7 +26,7 @@ For comprehensive API documentation, please see the `docs/` folder in the NVTT 3
 
 ## Build Instructions
 
-To build these samples, you'll need the NVTT 3 SDK, distributed with the [NVIDIA Texture Tools Exporter](https://developer.nvidia.com/nvidia-texture-tools-exporter). For `cuda_input`, you'll also need the [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads). Then do one of the following:
+To build these samples, you'll need the [NVTT 3 SDK](https://developer.nvidia.com/gpu-accelerated-texture-compression). For `cuda_input`, you'll also need the [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads). Then do one of the following:
 
 - To clone all NVIDIA DesignWorks Samples, clone https://github.com/nvpro-samples/build_all, then run one of the `clone_all` scripts in that directory.
 - Or to get the files for this sample without the other samples, clone this repository as well as https://github.com/nvpro-samples/nvpro_core into a single directory.
