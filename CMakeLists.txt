@@ -1,4 +1,4 @@
-#  Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+#  Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
 # 
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -46,6 +46,13 @@ endif()
 _add_project_definitions(nvtt_samples)
 _add_package_Cuda()
 _add_nvpro_core_lib()
+
+#####################################################################################
+_find_package_OpenMP()
+if (OPENMP_FOUND)
+    set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+endif()
 
 #####################################################################################
 # Find NVTT
@@ -177,6 +184,7 @@ add_nvtt_sample("decompress")
 add_nvtt_sample("imgdiff")
 add_nvtt_sample("mini_bc7")
 add_nvtt_sample("mipmap")
+add_nvtt_sample("to_slope_space")
 
 #####################################################################################
 # Copy sample images to the install directory.
