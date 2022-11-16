@@ -106,18 +106,9 @@ if(WIN32)
   endif()
 endif()
 
-# Find the CUDA runtime library packaged with NVTT it depends upon.
-file(GLOB _NVTT_CUDART_POSSIBILITIES "${NVTT_DIR}/libcudart.so.*" "${NVTT_DIR}/cudart64_*.dll")
-if(NOT _NVTT_CUDART_POSSIBILITIES)
-  message(WARNING "NVTT_DIR didn't contain a CUDA runtime library of the expected format! Is NVTT_DIR set correctly? NVTT_DIR was ${NVTT_DIR}. This will still work correctly, but running the samples on a different computer might not work correctly without this file.")
-else()
-  list(GET _NVTT_CUDART_POSSIBILITIES 0 _NVTT_CUDART)
-endif()
-
 # Print out information to help with error reports.
 message(STATUS "NVTT Shared Library: ${_NVTT_SL}")
 message(STATUS "NVTT .lib (Windows): ${NVTT_LIB}")
-message(STATUS "NVTT CUDA runtime shared library: ${_NVTT_CUDART}")
 
 file(GLOB _COMMON_FILES "${CMAKE_CURRENT_LIST_DIR}/common/*.cpp" "${CMAKE_CURRENT_LIST_DIR}/common/*.h")
 
@@ -191,5 +182,5 @@ add_nvtt_sample("to_slope_space")
 install(FILES ${CMAKE_CURRENT_LIST_DIR}/cuda_input.raw CONFIGURATIONS Debug DESTINATION "bin_${ARCH}_debug/${PROJNAME}")
 install(FILES ${CMAKE_CURRENT_LIST_DIR}/cuda_input.raw CONFIGURATIONS Release DESTINATION "bin_${ARCH}/${PROJNAME}")
 # Copy the NVTT shared libraries to the install directory.
-install(FILES "${_NVTT_SL}" "${_NVTT_CUDART}" CONFIGURATIONS Debug DESTINATION "bin_${ARCH}_debug")
-install(FILES "${_NVTT_SL}" "${_NVTT_CUDART}" CONFIGURATIONS Release DESTINATION "bin_${ARCH}")
+install(FILES "${_NVTT_SL}" CONFIGURATIONS Debug DESTINATION "bin_${ARCH}_debug")
+install(FILES "${_NVTT_SL}" CONFIGURATIONS Release DESTINATION "bin_${ARCH}")
