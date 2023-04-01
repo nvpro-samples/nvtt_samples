@@ -147,7 +147,7 @@ int main(int argc, char* argv[])
     // Resize for pretier histograms.
     hist.resize(512, 128, 1, nvtt::ResizeFilter_Box);
 
-    fs::path name = output.replace_extension(".histogram");
+    fs::path name = fs::path(output).replace_extension(".histogram");
     name += fs::path(savePNG ? ".png" : ".tga");
 
     hist.save(name.string().c_str());
@@ -186,7 +186,7 @@ int main(int argc, char* argv[])
       for(uint32_t m = 0; m < mipmapCount; m++)
       {
         // set output filename, if we are doing faces and/or mipmaps
-        name = output.replace_extension("");
+        name = fs::path(output).replace_extension("");
         if(faces)
           name += "_face" + std::to_string(f);
         if(mipmaps)

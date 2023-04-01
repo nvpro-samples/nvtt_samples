@@ -407,12 +407,12 @@ int main(int argc, char* argv[])
       }
       else
       {
-        output = input.replace_extension("dds");
+        output = fs::path(input).replace_extension("dds");
       }
 
       if(output == input)
       {
-        output = output.replace_extension("");
+        output.replace_extension("");
         output += "_out.dds";
       }
 

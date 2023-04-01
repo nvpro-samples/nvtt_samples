@@ -58,7 +58,7 @@ static void GenFileList(const std::string& inDir, const std::string& outDir, std
 
     FileNamePair p1;
     p1.input     = fs::path(inDir) / filename;
-    p1.output    = fs::path(outDir) / filename.replace_extension("dds");
+    p1.output    = fs::path(outDir) / fs::path(filename).replace_extension("dds");
     p1.inputSize = dir_entry.file_size();
 
     fileList.push_back(p1);
@@ -499,12 +499,12 @@ int main(int argc, char* argv[])
       p1.output = outStr;
     else
     {
-      p1.output = p1.input.replace_extension("dds");
+      p1.output = fs::path(p1.input).replace_extension("dds");
     }
 
     if(p1.output == p1.input)
     {
-      p1.output = p1.output.replace_extension("");
+      p1.output.replace_extension("");
       p1.output += "_out.dds";
     }
 
