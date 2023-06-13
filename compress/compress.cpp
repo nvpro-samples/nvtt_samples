@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2007-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,87 +13,113 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * SPDX-FileCopyrightText: Copyright (c) 2007-2021 NVIDIA CORPORATION
+ * SPDX-FileCopyrightText: Copyright (c) 2007-2023 NVIDIA CORPORATION
  * SPDX-License-Identifier: Apache-2.0
  */
+
 #include "utilities.h"
 #include <algorithm>
-#include <cassert>
 #include <filesystem>
-#include <fstream>
+#include <limits>
+#include <new>
 #include <nvtt/nvtt.h>
+#include <string>
 #include <string.h>
+#include <vector>
 
 namespace fs = std::filesystem;
 using Clock  = std::chrono::high_resolution_clock;
-
-struct MyOutputHandler : public nvtt::OutputHandler
-{
-  MyOutputHandler(const char* name)
-      : total(0)
-      , progress(0)
-      , percentage(0)
-  {
-    stream = std::fstream(name, std::ios::out | std::ios::binary);
-  }
-  virtual ~MyOutputHandler() { stream.close(); }
-
-  void setTotal(uint64_t t)
-  {
-    // Include the size of the 128-byte DDS header:
-    total = t + 128;
-  }
-  void setDisplayProgress(bool b) { verbose = b; }
-
-  virtual void beginImage(int size, int width, int height, int depth, int face, int miplevel)
-  {
-    // ignore.
-  }
-
-  virtual void endImage()
-  {
-    // Ignore.
-  }
-
-  // Output data.
-  virtual bool writeData(const void* data, int size)
-  {
-    if((!stream.is_open()) || stream.fail())
-      return false;
-
-    stream.write(static_cast<const char*>(data), size);
-
-    progress += size;
-    int p = int((100 * progress) / total);
-
-    if(verbose && p != percentage)
-    {
-      assert(p >= 0);
-
-      percentage = p;
-      printf("\r%d%%", percentage);
-      fflush(stdout);
-    }
-
-    return true;
-  }
-
-  uint64_t     total;     // Estimated size of the file.
-  uint64_t     progress;  // Current number of bytes written.
-  int          percentage;
-  bool         verbose;
-  std::fstream stream;
-};
 
 struct MyErrorHandler : public nvtt::ErrorHandler
 {
   virtual void error(nvtt::Error e)
   {
-    assert(false);
+#if _DEBUG
+    nvDebugBreak();
+#endif
     printf("Error: '%s'\n", nvtt::errorString(e));
   }
 };
 
+struct FileNamePair
+{
+  fs::path       input;
+  fs::path       output;
+  std::uintmax_t inputSize = 0;
+};
+
+static void GenFileList(const std::string& inDir, const std::string& outDir, std::vector<FileNamePair>& fileList)
+{
+  for(auto const& dir_entry : fs::directory_iterator(inDir))
+  {
+    if(!dir_entry.is_regular_file())
+      continue;
+
+    fs::path filename = dir_entry.path().filename();
+
+    FileNamePair p1;
+    p1.input     = fs::path(inDir) / filename;
+    p1.output    = fs::path(outDir) / fs::path(filename).replace_extension("dds");
+    p1.inputSize = dir_entry.file_size();
+
+    fileList.push_back(p1);
+  }
+}
+
+static void ClearLists(nvtt::BatchList& batchList, std::vector<nvtt::Surface*>& SurfaceList, std::vector<nvtt::OutputOptions*>& OutputOptionsList)
+{
+  for(unsigned i = 0; i < SurfaceList.size(); i++)
+  {
+    delete SurfaceList[i];
+  }
+  SurfaceList.clear();
+
+  for(unsigned i = 0; i < OutputOptionsList.size(); i++)
+  {
+    delete OutputOptionsList[i];
+  }
+  OutputOptionsList.clear();
+
+  batchList.Clear();
+}
+
+// Tries to read a nonnegative integer from argument i in the argument list.
+// If this fails, prints an error message, leaves the value unchanged,
+// and returns false.
+static bool tryParseInt(int& value, int i, int argc, char* argv[], const char* argumentNameForMessages)
+{
+  if(i >= argc)
+  {
+    printf("%s was at the end of the argument list; it must be followed by a nonnegative integer.", argumentNameForMessages);
+    return false;
+  }
+  char*      end_ptr;
+  const long read_value = strtol(argv[i], &end_ptr, 10);
+  if(read_value < 0 || read_value >= std::numeric_limits<int>::max() || end_ptr == argv[i])
+  {
+    printf("%s was followed by a negative, out-of-range, or unparseable integer (%s).", argumentNameForMessages, argv[i]);
+    return false;
+  }
+  value = read_value;
+  return true;
+}
+
+// Returns true iff argValue is equal to -flagName or --flagName.
+// This makes it so that Texture Tools Exporter command lines
+// (which use --) often work with nvtt_compress, while being compatible with
+// previous nvtt_compress versions (which use
+// Both strings must be null-terminated.
+static bool argMatches(const char* flagName, const char* argValue)
+{
+  size_t firstCharAfterDashes = 0;
+  while(argValue[firstCharAfterDashes] == '-' && firstCharAfterDashes < 2)
+  {
+    firstCharAfterDashes++;
+  }
+  // Note that firstCharAfterDashes might now point to the null terminator.
+  // This is OK; it means that flagName "" will match "-" and "--".
+  return strcmp(flagName, argValue + firstCharAfterDashes) == 0;
+}
 
 int main(int argc, char* argv[])
 {
@@ -105,8 +131,10 @@ int main(int argc, char* argv[])
   bool color2normal     = false;
   bool normalizeMipMaps = false;
 
-  bool wrapRepeat = false;
-  bool noMipmaps  = false;
+  bool wrapRepeat      = false;
+  int  maxMipCount     = std::numeric_limits<int>::max();
+  int  minMipSize      = 1;
+  bool mipGammaCorrect = true;
 
   bool fast       = false;
   bool production = false;
@@ -125,8 +153,8 @@ int main(int argc, char* argv[])
   bool dds10     = false;
   bool profiling = false;
 
-  fs::path input;
-  fs::path output;
+  const char* inStr  = nullptr;
+  const char* outStr = nullptr;
 
   float WeightR = 1.0f;
   float WeightG = 1.0f;
@@ -137,22 +165,24 @@ int main(int argc, char* argv[])
   for(int i = 1; i < argc; i++)
   {
     // Input options.
-    if(strcmp("-color", argv[i]) == 0)
+    if(argMatches("color", argv[i]))
     {
     }
-    else if(strcmp("-alpha", argv[i]) == 0)
+    else if(argMatches("alpha", argv[i]))
     {
       alpha     = true;
       alpha_set = true;
     }
-    else if(strcmp("-noalpha", argv[i]) == 0)
+    else if(argMatches("noalpha", argv[i]))
     {
       alpha     = false;
       alpha_set = true;
     }
-    else if(strcmp("-alpha_dithering", argv[i]) == 0)
+    else if(argMatches("alpha_dithering", argv[i]))
     {
       alpha_dithering = true;
+      // Since the number after alpha_dithering is optional,
+      // this doesn't use tryParseInt():
       if(i + 1 < argc)
       {
         int bits = atoi(argv[i + 1]);
@@ -163,32 +193,44 @@ int main(int argc, char* argv[])
         }
       }
     }
-    else if(strcmp("-normal", argv[i]) == 0)
+    else if(argMatches("normal", argv[i]))
     {
       normal           = true;
       color2normal     = false;
       normalizeMipMaps = true;
     }
-    else if(strcmp("-tonormal", argv[i]) == 0)
+    else if(argMatches("tonormal", argv[i]))
     {
       normal           = false;
       color2normal     = true;
       normalizeMipMaps = true;
     }
-    else if(strcmp("-clamp", argv[i]) == 0)
+    else if(argMatches("clamp", argv[i]))
     {
     }
-    else if(strcmp("-repeat", argv[i]) == 0)
+    else if(argMatches("repeat", argv[i]))
     {
       wrapRepeat = true;
     }
-    else if(strcmp("-nomips", argv[i]) == 0)
+    else if(argMatches("nomips", argv[i]) || argMatches("no-mips", argv[i]))
     {
-      noMipmaps = true;
+      maxMipCount = 1;
     }
-    else if(strcmp("-mipfilter", argv[i]) == 0)
+    else if(argMatches("max-mip-count", argv[i]))
     {
-      if(i + 1 == argc)
+      i++;
+      if(!tryParseInt(maxMipCount, i, argc, argv, "max-mip-count"))
+        return EXIT_FAILURE;
+    }
+    else if(argMatches("min-mip-size", argv[i]))
+    {
+      i++;
+      if(!tryParseInt(minMipSize, i, argc, argv, "min-mip-size"))
+        return EXIT_FAILURE;
+    }
+    else if(argMatches("mipfilter", argv[i]) || argMatches("mip-filter", argv[i]))
+    {
+      if(i + 1 >= argc)
         break;
       i++;
 
@@ -199,221 +241,214 @@ int main(int argc, char* argv[])
       else if(strcmp("kaiser", argv[i]) == 0)
         mipmapFilter = nvtt::MipmapFilter_Kaiser;
     }
-    else if(strcmp("-rgbm", argv[i]) == 0)
+    else if(argMatches("no-mip-gamma-correct", argv[i]))
+    {
+      mipGammaCorrect = false;
+    }
+    else if(argMatches("rgbm", argv[i]))
     {
       rgbm = true;
     }
-    else if(strcmp("-rangescale", argv[i]) == 0)
+    else if(argMatches("rangescale", argv[i]))
     {
       rangescale = true;
     }
-    else if(strcmp("-weight_r", argv[i]) == 0)
+    else if(argMatches("weight_r", argv[i]) || argMatches("weight-r", argv[i]))
     {
       i++;
       if(i < argc)
         WeightR = (float)atof(argv[i]);
     }
-    else if(strcmp("-weight_g", argv[i]) == 0)
+    else if(argMatches("weight_g", argv[i]) || argMatches("weight-g", argv[i]))
     {
       i++;
       if(i < argc)
         WeightG = (float)atof(argv[i]);
     }
-    else if(strcmp("-weight_b", argv[i]) == 0)
+    else if(argMatches("weight_b", argv[i]) || argMatches("weight-b", argv[i]))
     {
       i++;
       if(i < argc)
         WeightB = (float)atof(argv[i]);
     }
-    else if(strcmp("-weight_a", argv[i]) == 0)
+    else if(argMatches("weight_a", argv[i]) || argMatches("weight-a", argv[i]))
     {
       i++;
       if(i < argc)
         WeightA = (float)atof(argv[i]);
     }
     // Compression options.
-    else if(strcmp("-fast", argv[i]) == 0)
+    else if(argMatches("fast", argv[i]))
     {
       fast = true;
     }
-    else if(strcmp("-production", argv[i]) == 0)
+    else if(argMatches("production", argv[i]))
     {
       production = true;
     }
-    else if(strcmp("-highest", argv[i]) == 0)
+    else if(argMatches("highest", argv[i]))
     {
       highest = true;
     }
-    else if(strcmp("-nocuda", argv[i]) == 0)
+    else if(argMatches("nocuda", argv[i]) || argMatches("no-cuda", argv[i]))
     {
       nocuda = true;
     }
-    else if(strcmp("-rgb", argv[i]) == 0)
+    else if(argMatches("rgb", argv[i]))
     {
       format = nvtt::Format_RGB;
     }
-    else if(strcmp("-lumi", argv[i]) == 0)
+    else if(argMatches("lumi", argv[i]))
     {
       luminance = true;
       format    = nvtt::Format_RGB;
     }
-    else if(strcmp("-bc1", argv[i]) == 0)
+    else if(argMatches("bc1", argv[i]))
     {
       format = nvtt::Format_BC1;
     }
-    else if(strcmp("-bc1n", argv[i]) == 0)
+    else if(argMatches("bc1n", argv[i]))
     {
       format = nvtt::Format_BC1;
       bc1n   = true;
     }
-    else if(strcmp("-bc1a", argv[i]) == 0)
+    else if(argMatches("bc1a", argv[i]))
     {
       format = nvtt::Format_BC1a;
     }
-    else if(strcmp("-bc2", argv[i]) == 0)
+    else if(argMatches("bc2", argv[i]))
     {
       format = nvtt::Format_BC2;
     }
-    else if(strcmp("-bc3", argv[i]) == 0)
+    else if(argMatches("bc3", argv[i]))
     {
       format = nvtt::Format_BC3;
     }
-    else if(strcmp("-bc3n", argv[i]) == 0)
+    else if(argMatches("bc3n", argv[i]))
     {
       format = nvtt::Format_BC3n;
     }
-    else if(strcmp("-bc4", argv[i]) == 0)
+    else if(argMatches("bc4", argv[i]))
     {
       format = nvtt::Format_BC4;
     }
-    else if(strcmp("-bc4s", argv[i]) == 0)
+    else if(argMatches("bc4s", argv[i]))
     {
       format = nvtt::Format_BC4S;
     }
-    else if(strcmp("-ati2", argv[i]) == 0)
+    else if(argMatches("ati2", argv[i]))
     {
       format = nvtt::Format_ATI2;
     }
-    else if(strcmp("-bc5", argv[i]) == 0)
+    else if(argMatches("bc5", argv[i]))
     {
       format = nvtt::Format_BC5;
     }
-    else if(strcmp("-bc5s", argv[i]) == 0)
+    else if(argMatches("bc5s", argv[i]))
     {
       format = nvtt::Format_BC5S;
     }
-    else if(strcmp("-bc6", argv[i]) == 0)
+    else if(argMatches("bc6", argv[i]))
     {
       format = nvtt::Format_BC6U;
     }
-    else if(strcmp("-bc6s", argv[i]) == 0)
+    else if(argMatches("bc6s", argv[i]))
     {
       format = nvtt::Format_BC6S;
     }
-    else if(strcmp("-bc7", argv[i]) == 0)
+    else if(argMatches("bc7", argv[i]))
     {
       format = nvtt::Format_BC7;
     }
-    else if(strcmp("-bc3_rgbm", argv[i]) == 0)
+    else if(argMatches("bc3_rgbm", argv[i]))
     {
       format = nvtt::Format_BC3_RGBM;
       rgbm   = true;
     }
-    else if(strcmp("-astc_ldr_4x4", argv[i]) == 0)
+    else if(argMatches("astc_ldr_4x4", argv[i]))
     {
       format = nvtt::Format_ASTC_LDR_4x4;
     }
-    else if(strcmp("-astc_ldr_5x4", argv[i]) == 0)
+    else if(argMatches("astc_ldr_5x4", argv[i]))
     {
       format = nvtt::Format_ASTC_LDR_5x4;
     }
-    else if(strcmp("-astc_ldr_5x5", argv[i]) == 0)
+    else if(argMatches("astc_ldr_5x5", argv[i]))
     {
       format = nvtt::Format_ASTC_LDR_5x5;
     }
-    else if(strcmp("-astc_ldr_6x5", argv[i]) == 0)
+    else if(argMatches("astc_ldr_6x5", argv[i]))
     {
       format = nvtt::Format_ASTC_LDR_6x5;
     }
-    else if(strcmp("-astc_ldr_6x6", argv[i]) == 0)
+    else if(argMatches("astc_ldr_6x6", argv[i]))
     {
       format = nvtt::Format_ASTC_LDR_6x6;
     }
-    else if(strcmp("-astc_ldr_8x5", argv[i]) == 0)
+    else if(argMatches("astc_ldr_8x5", argv[i]))
     {
       format = nvtt::Format_ASTC_LDR_8x5;
     }
-    else if(strcmp("-astc_ldr_8x6", argv[i]) == 0)
+    else if(argMatches("astc_ldr_8x6", argv[i]))
     {
       format = nvtt::Format_ASTC_LDR_8x6;
     }
-    else if(strcmp("-astc_ldr_8x8", argv[i]) == 0)
+    else if(argMatches("astc_ldr_8x8", argv[i]))
     {
       format = nvtt::Format_ASTC_LDR_8x8;
     }
-    else if(strcmp("-astc_ldr_10x5", argv[i]) == 0)
+    else if(argMatches("astc_ldr_10x5", argv[i]))
     {
       format = nvtt::Format_ASTC_LDR_10x5;
     }
-    else if(strcmp("-astc_ldr_10x6", argv[i]) == 0)
+    else if(argMatches("astc_ldr_10x6", argv[i]))
     {
       format = nvtt::Format_ASTC_LDR_10x6;
     }
-    else if(strcmp("-astc_ldr_10x8", argv[i]) == 0)
+    else if(argMatches("astc_ldr_10x8", argv[i]))
     {
       format = nvtt::Format_ASTC_LDR_10x8;
     }
-    else if(strcmp("-astc_ldr_10x10", argv[i]) == 0)
+    else if(argMatches("astc_ldr_10x10", argv[i]))
     {
       format = nvtt::Format_ASTC_LDR_10x10;
     }
-    else if(strcmp("-astc_ldr_12x10", argv[i]) == 0)
+    else if(argMatches("astc_ldr_12x10", argv[i]))
     {
       format = nvtt::Format_ASTC_LDR_12x10;
     }
-    else if(strcmp("-astc_ldr_12x12", argv[i]) == 0)
+    else if(argMatches("astc_ldr_12x12", argv[i]))
     {
       format = nvtt::Format_ASTC_LDR_12x12;
     }
-    else if(strcmp("-pause", argv[i]) == 0)
+    else if(argMatches("pause", argv[i]))
     {
       printf("Press ENTER\n");
       fflush(stdout);
-      getchar();
+      (void)getchar();
     }
 
     // Output options
-    else if(strcmp("-silent", argv[i]) == 0)
+    else if(argMatches("silent", argv[i]))
     {
       silent = true;
     }
-    else if(strcmp("-dds10", argv[i]) == 0)
+    else if(argMatches("dds10", argv[i]))
     {
       dds10 = true;
     }
-
-    else if(strcmp("-profile", argv[i]) == 0)
+    else if(argMatches("profile", argv[i]))
     {
       profiling = true;
     }
 
     else if(argv[i][0] != '-')
     {
-      input = argv[i];
+      inStr = argv[i];
 
       if(i + 1 < argc && argv[i + 1][0] != '-')
       {
-        output = argv[i + 1];
-      }
-      else
-      {
-        output = fs::path(input).replace_extension("dds");
-      }
-
-      if(output == input)
-      {
-        output.replace_extension("");
-        output += "_out.dds";
+        outStr = argv[i + 1];
       }
 
       break;
@@ -432,33 +467,36 @@ int main(int argc, char* argv[])
 
   if(!silent)
   {
-    printf("NVIDIA Texture Tools %u.%u.%u - Copyright NVIDIA Corporation 2015 - 2021\n\n", major, minor, rev);
+    printf("NVIDIA Texture Tools %u.%u.%u - Copyright NVIDIA Corporation 2007 - 2023\n", major, minor, rev);
   }
 
-  if(input.empty())
+  if(inStr == nullptr)
   {
-    printf("usage: nvtt_compress [options] infile [outfile.dds]\n\n");
+    printf("usage: nvtt_compress [options] infile(or dir) [outfile(or dir)]\n\n");
 
     printf("Input options:\n");
-    printf("  -color        The input image is a color map (default).\n");
-    printf("  -alpha        The input image has an alpha channel used for transparency.\n");
-    printf("  -noalpha      The input image has no alpha channel used for transparency.\n");
+    printf("  -color          The input image is a color map (default).\n");
+    printf("  -alpha          The input image has an alpha channel used for transparency.\n");
+    printf("  -noalpha        The input image has no alpha channel used for transparency.\n");
     printf(
         "  -alpha_dithering  Enable alpha dithering. Can be followed by a number indicating the number of bits used in "
         "alpha dithering.\n");
-    printf("  -normal       The input image is a normal map.\n");
-    printf("  -tonormal     Convert input to normal map.\n");
-    printf("  -clamp        Clamp wrapping mode (default).\n");
-    printf("  -repeat       Repeat wrapping mode.\n");
-    printf("  -nomips       Disable mipmap generation.\n");
-    printf("  -mipfilter    Mipmap filter. One of the following: box, triangle, kaiser.\n");
-    printf("  -rgbm         Transform input to RGBM.\n");
-    printf("  -rangescale   Scale image to use entire color range.\n");
-    printf("  -weight_r     Weight of R channel, default is 1.\n");
-    printf("  -weight_g     Weight of G channel, default is 1.\n");
-    printf("  -weight_b     Weight of B channel, default is 1.\n");
+    printf("  -normal         The input image is a normal map.\n");
+    printf("  -tonormal       Convert input to normal map.\n");
+    printf("  -clamp          Clamp wrapping mode (default).\n");
+    printf("  -repeat         Repeat wrapping mode.\n");
+    printf("  -nomips         Disable mipmap generation.\n");
+    printf("  -max-mip-count  Maximum number of mipmaps. 0 and 1 are the same as -nomips; 2 generates the base mip and one more; and so on.\n");
+    printf("  -min-mip-size   Minimum mipmap size; avoids generating mips whose width or height is smaller than this number. (default: 1)\n");
+    printf("  -mipfilter      Mipmap filter. One of the following: box, triangle, kaiser.\n");
+    printf("  -no-mip-gamma-correct  Do not convert to linear space when downsampling. (default: only for normal maps)\n");
+    printf("  -rgbm           Transform input to RGBM.\n");
+    printf("  -rangescale     Scale image to use entire color range.\n");
+    printf("  -weight_r       Weight of R channel, default is 1.\n");
+    printf("  -weight_g       Weight of G channel, default is 1.\n");
+    printf("  -weight_b       Weight of B channel, default is 1.\n");
     printf(
-        "  -weight_a     Weight of A channel, default is 1 when alpha is used, overwritten to 0 when alpha is not "
+        "  -weight_a       Weight of A channel, default is 1 when alpha is used, overwritten to 0 when alpha is not "
         "used.\n\n");
 
     printf("Compression options:\n");
@@ -495,23 +533,54 @@ int main(int argc, char* argv[])
 
   bool SNorm = false;
 
-
-  // Make sure input file exists.
-  if(!fs::exists(input))
+  if(!fs::exists(fs::path(inStr)))
   {
-    fprintf(stderr, "The file '%s' does not exist.\n", input.string().c_str());
-    return 1;
+    printf("The input directory %s did not exist.\n", inStr);
+    return 0;
+  }
+
+  bool isDir = fs::is_directory(fs::path(inStr));
+
+  std::vector<FileNamePair> FileList;
+  if(isDir)
+  {
+    std::string inDir = inStr;
+    std::string outDir;
+
+    if(outStr)
+      outDir = outStr;
+    else
+      outDir = inDir + "_out";
+
+    if(!fs::exists(outDir))
+    {
+      fs::create_directory(outDir);
+    }
+    GenFileList(inDir, outDir, FileList);
+  }
+  else
+  {
+    FileNamePair p1;
+    p1.input = inStr;
+
+    if(outStr)
+      p1.output = outStr;
+    else
+    {
+      p1.output = fs::path(p1.input).replace_extension("dds");
+    }
+
+    if(p1.output == p1.input)
+    {
+      p1.output.replace_extension("");
+      p1.output += "_out.dds";
+    }
+
+    FileList.push_back(p1);
   }
 
   // Set input options.
   nvtt::WrapMode wrapMode = wrapRepeat ? nvtt::WrapMode_Repeat : nvtt::WrapMode_Clamp;
-
-  // no need to resize
-#if 1
-  nvtt::RoundMode roundMode = nvtt::RoundMode_None;
-#else
-  nvtt::RoundMode roundMode = (!noMipmaps && format != nvtt::Format_RGB) ? nvtt::RoundMode_ToPreviousPowerOfTwo : nvtt::RoundMode_None;
-#endif
 
   nvtt::CompressionOptions compressionOptions;
   compressionOptions.setFormat(format);
@@ -626,48 +695,12 @@ int main(int argc, char* argv[])
     compressionOptions.setColorWeights(WeightR, WeightG, WeightB, WeightA);
   }
 
-  MyErrorHandler  errorHandler;
-  MyOutputHandler outputHandler(output.string().c_str());
-  if(outputHandler.stream.fail())
+  // Automatically use dds10 if compressing to BC6 or BC7
+  if(format == nvtt::Format_BC6U || format == nvtt::Format_BC6S || format == nvtt::Format_BC7
+     || (format >= nvtt::Format_ASTC_LDR_4x4 && format <= nvtt::Format_ASTC_LDR_12x12))
   {
-    fprintf(stderr, "Error opening '%s' for writting\n", output.string().c_str());
-    return EXIT_FAILURE;
+    dds10 = true;
   }
-
-  // Load input image.
-  nvtt::Surface    image;
-  nvtt::SurfaceSet images;
-
-  bool mutliInputImage = false;
-
-  nvtt::TextureType textureType(nvtt::TextureType_2D);
-
-
-  if(!noMipmaps && stringEqualsCaseInsensitive(input.extension().string(), ".dds") && format != nvtt::Format_BC3_RGBM
-     && !rgbm && format != nvtt::Format_BC6U && format != nvtt::Format_BC6S)
-  {
-    if(images.loadDDS(input.string().c_str()))
-    {
-      textureType = images.GetTextureType();
-
-      image           = images.GetSurface(0, 0, SNorm);
-      mutliInputImage = (images.GetMipmapCount() > 1 || images.GetFaceCount() > 1);
-    }
-  }
-
-  if(image.isNull())
-  {
-    if(!image.load(input.string().c_str(), 0, SNorm))
-    {
-      fprintf(stderr, "Error opening input file '%s'.\n", input.string().c_str());
-      return EXIT_FAILURE;
-    }
-    textureType = image.type();
-  }
-
-  nvtt::AlphaMode alphaMode = image.alphaMode();
-  if(alpha_set)
-    alphaMode = alpha ? nvtt::AlphaMode_Transparency : nvtt::AlphaMode_None;
 
   const auto startTime = Clock::now();
 
@@ -694,198 +727,269 @@ int main(int argc, char* argv[])
   if(timingContext)
     timingContext->SetDetailLevel(3);
 
-  image.setWrapMode(wrapMode);
-  image.setNormalMap(normal);
+  MyErrorHandler errorHandler;
 
-  if(format == nvtt::Format_BC3_RGBM || rgbm)
+  /// ToDo
+  unsigned long long batchSizeLimit = 104857600;
+
+  unsigned long long                curBatchSize = 0;
+  nvtt::BatchList                   batchList;
+  std::vector<nvtt::Surface*>       SurfaceList;
+  std::vector<nvtt::OutputOptions*> OutputOptionsList;
+  std::vector<std::string>          compressingList;
+
+  unsigned i = 0;
+  while(i < FileList.size())
   {
-    if(rangescale)
+    for(; i < FileList.size(); i++)
     {
-      // get color range
-      float min_color[3], max_color[3];
-      image.range(0, &min_color[0], &max_color[0], -1, 0.0f, timingContext);
-      image.range(1, &min_color[1], &max_color[1], -1, 0.0f, timingContext);
-      image.range(2, &min_color[2], &max_color[2], -1, 0.0f, timingContext);
+      if(curBatchSize + FileList[i].inputSize > batchSizeLimit && curBatchSize > 0)
+        break;
 
-      //printf("Color range = %.2f %.2f %.2f\n", max_color[0], max_color[1], max_color[2]);
+      const fs::path&   input    = FileList[i].input;
+      const std::string inputStr = input.string();
 
-      float       color_range     = std::max({max_color[0], max_color[1], max_color[2]});
-      const float max_color_range = 16.0f;
+      nvtt::Surface    image;
+      nvtt::SurfaceSet images;
 
-      if(color_range > max_color_range)
+      bool multiInputImage = false;
+
+      nvtt::TextureType textureType(nvtt::TextureType_2D);
+
+
+      if((maxMipCount > 1) && stringEqualsCaseInsensitive(input.extension().string(), ".dds")
+         && format != nvtt::Format_BC3_RGBM && !rgbm && format != nvtt::Format_BC6U && format != nvtt::Format_BC6S)
       {
-        //printf("Clamping color range %f to %f\n", color_range, max_color_range);
-        color_range = max_color_range;
-      }
+        if(images.loadDDS(inputStr.c_str()))
+        {
+          textureType = images.GetTextureType();
 
-      for(int i = 0; i < 3; i++)
-      {
-        image.scaleBias(i, 1.0f / color_range, 0.0f, timingContext);
-      }
-      image.toneMap(nvtt::ToneMapper_Linear, /*parameters=*/NULL, timingContext);  // Clamp without changing the hue.
-
-      // Clamp alpha.
-      image.clamp(3, 0.0f, 1.0f, timingContext);
-    }
-
-    // To gamma.
-    image.toGamma(2.2f, timingContext);
-
-    if(format != nvtt::Format_BC3_RGBM)
-    {
-      alphaMode = nvtt::AlphaMode_None;
-      image.toRGBM(1, 0.15f, timingContext);
-    }
-  }
-
-  if(format == nvtt::Format_BC6U || format == nvtt::Format_BC6S)
-    alphaMode = nvtt::AlphaMode_None;
-
-  image.setAlphaMode(alphaMode);
-
-  int faceCount = mutliInputImage ? images.GetFaceCount() : 1;
-
-  int width  = image.width();
-  int height = image.height();
-  int depth  = image.depth();
-
-  nvtt::getTargetExtent(&width, &height, &depth, 0, roundMode, textureType, timingContext);
-
-  bool useGPUImageProcess = (size_t)16 * width * height * depth < 100 * 1024 * 1024;
-
-  int mipmapCount = noMipmaps ? 1 : nvtt::countMipmaps(width, height, depth);
-
-  int outputSize = context.estimateSize(image, mipmapCount, compressionOptions) * faceCount;
-
-  outputHandler.setTotal(outputSize);
-  outputHandler.setDisplayProgress(!silent);
-
-  nvtt::OutputOptions outputOptions;
-  outputOptions.setOutputHandler(&outputHandler);
-  outputOptions.setErrorHandler(&errorHandler);
-
-  // Automatically use dds10 if compressing to BC6 or BC7
-  if(format == nvtt::Format_BC6U || format == nvtt::Format_BC6S || format == nvtt::Format_BC7
-     || (format >= nvtt::Format_ASTC_LDR_4x4 && format <= nvtt::Format_ASTC_LDR_12x12))
-  {
-    dds10 = true;
-  }
-
-  if(dds10)
-  {
-    outputOptions.setContainer(nvtt::Container_DDS10);
-  }
-
-  //// compress procedure
-
-  // If the extents have not changed, then we can use source images for all mipmaps.
-  bool canUseSourceImages = (image.width() == width && image.height() == height && image.depth() == depth);
-
-  if(!context.outputHeader(textureType, width, height, depth, mipmapCount, normal || color2normal, compressionOptions, outputOptions))
-  {
-    fprintf(stderr, "Error writing file header.\n");
-    return EXIT_FAILURE;
-  }
-
-  // Output images.
-  for(int f = 0; f < faceCount; f++)
-  {
-    int w = width;
-    int h = height;
-    int d = depth;
-
-    bool useSourceImages = canUseSourceImages;
-
-    if(f > 0)
-      images.GetSurface(f, 0, image, SNorm);
-
-    if(useCuda && useGPUImageProcess)
-      image.ToGPU(timingContext);
-
-    // To normal map.
-    if(color2normal)
-    {
-      image.toGreyScale(1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f, 0.0f, timingContext);
-      image.toNormalMap(1.0f / 1.875f, 0.5f / 1.875f, 0.25f / 1.875f, 0.125f / 1.875f, timingContext);
-    }
-
-    // To linear space.
-    if(!image.isNormalMap() && !(noMipmaps && canUseSourceImages))
-    {
-      image.toLinear(2.2f, timingContext);
-    }
-
-    // Resize input.
-    if(!canUseSourceImages)
-      image.resize(w, h, d, nvtt::ResizeFilter_Box, timingContext);
-
-    nvtt::Surface tmp = image;
-    if(!image.isNormalMap() && !(noMipmaps && canUseSourceImages))
-    {
-      tmp.toGamma(2.2f, timingContext);
-    }
-
-    context.quantize(tmp, compressionOptions);
-    context.compress(tmp, f, 0, compressionOptions, outputOptions);
-
-
-    for(int m = 1; m < mipmapCount; m++)
-    {
-      w = std::max(1, w / 2);
-      h = std::max(1, h / 2);
-      d = std::max(1, d / 2);
-
-      if(useSourceImages)
-      {
-        if(!mutliInputImage || m >= images.GetMipmapCount())
-        {                           // One face is missing in this mipmap level.
-          useSourceImages = false;  // If one level is missing, ignore the following source images.
+          image           = images.GetSurface(0, 0, SNorm);
+          multiInputImage = (images.GetMipmapCount() > 1 || images.GetFaceCount() > 1);
         }
       }
 
-      if(useSourceImages)
+      if(image.isNull())
       {
-        images.GetSurface(f, m, image, SNorm);
-        if(useCuda && useGPUImageProcess)
+        if(!image.load(inputStr.c_str(), 0, SNorm, timingContext))
+        {
+          fprintf(stderr, "Error opening input file '%s'.\n", inputStr.c_str());
+          return EXIT_FAILURE;
+        }
+        textureType = image.type();
+      }
+
+      nvtt::AlphaMode alphaMode = image.alphaMode();
+      if(alpha_set)
+        alphaMode = alpha ? nvtt::AlphaMode_Transparency : nvtt::AlphaMode_None;
+
+      image.setWrapMode(wrapMode);
+      image.setNormalMap(normal);
+
+      if(format == nvtt::Format_BC3_RGBM || rgbm)
+      {
+        if(rangescale)
+        {
+          // get color range
+          float min_color[3], max_color[3];
+          image.range(0, &min_color[0], &max_color[0], -1, 0.0f, timingContext);
+          image.range(1, &min_color[1], &max_color[1], -1, 0.0f, timingContext);
+          image.range(2, &min_color[2], &max_color[2], -1, 0.0f, timingContext);
+
+          //printf("Color range = %.2f %.2f %.2f\n", max_color[0], max_color[1], max_color[2]);
+
+          float       color_range     = std::max({max_color[0], max_color[1], max_color[2]});
+          const float max_color_range = 16.0f;
+
+          if(color_range > max_color_range)
+          {
+            //printf("Clamping color range %f to %f\n", color_range, max_color_range);
+            color_range = max_color_range;
+          }
+
+          for(int i = 0; i < 3; i++)
+          {
+            image.scaleBias(i, 1.0f / color_range, 0.0f, timingContext);
+          }
+          image.toneMap(nvtt::ToneMapper_Linear, /*parameters=*/NULL, timingContext);  // Clamp without changing the hue.
+
+          // Clamp alpha.
+          image.clamp(3, 0.0f, 1.0f, timingContext);
+        }
+
+        // To sRGB.
+        if(mipGammaCorrect)
+        {
+          image.toSrgbUnclamped(timingContext);
+        }
+
+        if(format != nvtt::Format_BC3_RGBM)
+        {
+          alphaMode = nvtt::AlphaMode_None;
+          image.toRGBM(1, 0.15f, timingContext);
+        }
+      }
+
+      if(format == nvtt::Format_BC6U || format == nvtt::Format_BC6S)
+        alphaMode = nvtt::AlphaMode_None;
+
+      image.setAlphaMode(alphaMode);
+
+      const int faceCount = multiInputImage ? images.GetFaceCount() : 1;
+
+      const int mip0Width   = image.width();
+      const int mip0Height  = image.height();
+      const int mip0Depth   = image.depth();
+      int mipmapCount = 1;
+      while(mipmapCount < maxMipCount)
+      {
+        const int nextMip   = mipmapCount + 1;
+        const int mipWidth  = std::max(1, mip0Width >> mipmapCount);
+        const int mipHeight = std::max(1, mip0Height >> mipmapCount);
+        if((mipWidth == 1 && mipHeight == 1) || (mipWidth < minMipSize) || (mipHeight < minMipSize))
+        {
+          break;
+        }
+        mipmapCount++;
+      }
+
+      nvtt::OutputOptions* outputOptions = new nvtt::OutputOptions;
+      outputOptions->setErrorHandler(&errorHandler);
+      outputOptions->setFileName(FileList[i].output.string().c_str());
+
+      compressingList.push_back(FileList[i].input.string().c_str());
+
+      if(dds10)
+      {
+        outputOptions->setContainer(nvtt::Container_DDS10);
+      }
+
+      //// compress procedure
+
+      if(!context.outputHeader(textureType, mip0Width, mip0Height, mip0Depth, mipmapCount,
+                               normal || color2normal, compressionOptions, *outputOptions))
+      {
+        fprintf(stderr, "Error writing file header %s.\n", FileList[i].output.string().c_str());
+        delete outputOptions;
+        continue;
+      }
+
+      OutputOptionsList.push_back(outputOptions);
+
+      // Output images.
+      for(int f = 0; f < faceCount; f++)
+      {
+        // Can we use the input SurfaceSet (true)? Or do we have to regenerate
+        // mipmaps (false)?
+        bool useSourceImages = true;
+
+        if(f > 0)
+          images.GetSurface(f, 0, image, SNorm);
+
+        if(useCuda)
           image.ToGPU(timingContext);
-        // For already generated mipmaps, we need to convert to linear.
-        if(!image.isNormalMap())
+
+        // To normal map.
+        if(color2normal)
         {
-          image.toLinear(2.2f, timingContext);
+          image.toGreyScale(1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f, 0.0f, timingContext);
+          image.toNormalMap(1.0f / 1.875f, 0.5f / 1.875f, 0.25f / 1.875f, 0.125f / 1.875f, timingContext);
         }
-      }
-      else
-      {
-        if(mipmapFilter == nvtt::MipmapFilter_Kaiser)
+
+        // To linear space.
+        if(!image.isNormalMap() && (mipmapCount > 1) && mipGammaCorrect)
         {
-          float params[2] = {1.0f /*kaiserStretch*/, 4.0f /*kaiserAlpha*/};
-          image.buildNextMipmap(nvtt::MipmapFilter_Kaiser, 3 /*kaiserWidth*/, params, 1, timingContext);
+          image.toLinearFromSrgbUnclamped(timingContext);
         }
-        else
+
+        nvtt::Surface tmp = image;
+        if(!tmp.isNormalMap() && (mipmapCount > 1) && mipGammaCorrect)
         {
-          image.buildNextMipmap(mipmapFilter, 1, timingContext);
+          tmp.toSrgbUnclamped(timingContext);
+        }
+
+        context.quantize(tmp, compressionOptions);
+        nvtt::Surface* surf = new nvtt::Surface(tmp);
+        SurfaceList.push_back(surf);
+        batchList.Append(surf, f, 0, outputOptions);
+
+        for(int m = 1; m < mipmapCount; m++)
+        {
+          if(useSourceImages)
+          {
+            if(!multiInputImage || m >= images.GetMipmapCount())
+            {                           // One face is missing in this mipmap level.
+              useSourceImages = false;  // If one level is missing, ignore the following source images.
+            }
+          }
+
+          if(useSourceImages)
+          {
+            images.GetSurface(f, m, image, SNorm);
+            if(useCuda)
+              image.ToGPU(timingContext);
+            // For already generated mipmaps, we need to convert to linear.
+            if(!image.isNormalMap() && mipGammaCorrect)
+            {
+              image.toLinearFromSrgbUnclamped(timingContext);
+            }
+          }
+          else
+          {
+            if(mipmapFilter == nvtt::MipmapFilter_Kaiser)
+            {
+              float params[2] = {1.0f /*kaiserStretch*/, 4.0f /*kaiserAlpha*/};
+              image.buildNextMipmap(nvtt::MipmapFilter_Kaiser, 3 /*kaiserWidth*/, params, 1, timingContext);
+            }
+            else
+            {
+              image.buildNextMipmap(mipmapFilter, 1, timingContext);
+            }
+          }
+
+          if(image.isNormalMap())
+          {
+            if(normalizeMipMaps)
+            {
+              image.normalizeNormalMap(timingContext);
+            }
+            tmp = image;
+          }
+          else
+          {
+            tmp = image;
+            if(mipGammaCorrect)
+            {
+              tmp.toSrgbUnclamped(timingContext);
+            }
+          }
+
+          context.quantize(tmp, compressionOptions);
+          nvtt::Surface* surf = new nvtt::Surface(tmp);
+          SurfaceList.push_back(surf);
+          batchList.Append(surf, f, m, outputOptions);
         }
       }
 
-      if(image.isNormalMap())
-      {
-        if(normalizeMipMaps)
-        {
-          image.normalizeNormalMap(timingContext);
-        }
-        tmp = image;
-      }
-      else
-      {
-        tmp = image;
-        tmp.toGamma(2.2f, timingContext);
-      }
-
-      context.quantize(tmp, compressionOptions);
-      context.compress(tmp, f, m, compressionOptions, outputOptions);
+      curBatchSize += FileList[i].inputSize;
     }
-  }
 
+    if(compressingList.size() == 0)
+      continue;
+
+    printf("Compressing the following files:\n");
+    for(unsigned i = 0; i < compressingList.size(); i++)
+    {
+      printf("%s\n", compressingList[i].data());
+    }
+    printf("\n");
+
+    context.compress(batchList, compressionOptions);
+
+    curBatchSize = 0;
+    ClearLists(batchList, SurfaceList, OutputOptionsList);
+    compressingList.clear();
+  }
 
   const auto endTime = Clock::now();
 

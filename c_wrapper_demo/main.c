@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION
  * SPDX-License-Identifier: Apache-2.0
  */
 // Shows how to use some features of NVTT 3's C wrapper. This allows NVTT 3
@@ -250,10 +250,15 @@ int main(int argc, char** argv)
     // we'll use the high-level API to write a DDS header, then append the BC5
     // data to the file. That way the output is a valid DDS file instead of a
     // raw buffer.
-    outfile = fopen("c_wrapper_demo_out_normal.dds", "wb");
+#ifdef _MSC_VER
+    const errno_t openErrno = fopen_s(&outfile, "c_wrapper_demo_out_normal.dds", "wb");
+#else
+    outfile                 = fopen("c_wrapper_demo_out_normal.dds", "wb");
+    const errno_t openErrno = errno;
+#endif
     if(outfile == NULL)
     {
-      printf("Unable to open c_wrapper_demo_out_normal.dds for writing!\n");
+      printf("Could not open c_wrapper_demo_out_normal.dds for writing! (Errno %i)\n", openErrno);
       exitCode = EXIT_FAILURE;
       goto CleanUp;
     }

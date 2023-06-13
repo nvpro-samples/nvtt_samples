@@ -18,8 +18,7 @@ int main(int n,char**v){if(n==3){nvtt::Surface i;i.load(v[1]);nvtt::Context c(1)
 
 This also includes the source code for several tools from NVTT 3 ported to use the nvpro-samples framework, which show how to use almost all of the functionality in NVTT 3:
 
-* [**compress**](compress) is a general command-line tool for compressing images to DDS files, and uses similar flags as the [Texture Tools Exporter's](https://developer.nvidia.com/nvidia-texture-tools-exporter) command-line interface. It supports many types of images, including normal maps.
-* [**batchCompress**](batchCompress) can be used to compress multiple files at once.
+* [**compress**](compress) is a general command-line tool for compressing images to DDS files, and uses similar flags as the [Texture Tools Exporter's](https://developer.nvidia.com/nvidia-texture-tools-exporter) command-line interface. It supports many types of images, including normal maps. It can also compress multiple files at once (the batchCompress tool was merged into it in June 2023)
 * [**decompress**](decompress) decompresses DDS files to other formats.
 * [**imgdiff**](imgdiff) reports error metrics between image files.
 

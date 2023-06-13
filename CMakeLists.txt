@@ -91,7 +91,9 @@ if(NOT _NVTT_SL_POSSIBILITIES)
   message(WARNING "NVTT_DIR didn't contain an NVTT shared library of the form nvtt*.dll or libnvtt.so.*! Is NVTT_DIR set correctly? NVTT_DIR was ${NVTT_DIR}")
   return()
 else()
-  list(GET _NVTT_SL_POSSIBILITIES 0 _NVTT_SL)
+  list(LENGTH _NVTT_SL_POSSIBILITIES _NVTT_SL_POSSIBILITIES_LEN)
+  math(EXPR _NVTT_SL_IDX ${_NVTT_SL_POSSIBILITIES_LEN}-1)
+  list(GET _NVTT_SL_POSSIBILITIES ${_NVTT_SL_IDX} _NVTT_SL)
 endif()
 
 # Find the NVTT linker library on Windows.
@@ -102,7 +104,9 @@ if(WIN32)
       message(WARNING "Found nvtt.dll in ${NVTT_DIR}, but was unable to find nvtt.lib in ${NVTT_DIR}/lib/... ! Please check the NVTT directory and this CMake script to see if the path is correct.")
       return()
     endif()
-    list(GET _NVTT_LIB_ALL 0 NVTT_LIB)
+    list(LENGTH _NVTT_LIB_ALL _NVTT_LIB_LEN)
+    math(EXPR _NVTT_LIB_IDX ${_NVTT_LIB_LEN}-1)
+    list(GET _NVTT_LIB_ALL ${_NVTT_LIB_IDX} NVTT_LIB)
   endif()
 endif()
 
@@ -167,7 +171,6 @@ endfunction()
 
 #####################################################################################
 # Add individual samples
-add_nvtt_sample("batchCompress")
 add_nvtt_sample("c_wrapper_demo")
 add_nvtt_sample("compress")
 add_nvtt_sample("cuda_input")
