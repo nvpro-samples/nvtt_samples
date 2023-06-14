@@ -833,6 +833,21 @@ int main(int argc, char* argv[])
       if(format == nvtt::Format_BC6U || format == nvtt::Format_BC6S)
         alphaMode = nvtt::AlphaMode_None;
 
+      // Workaround for a bug in NVTT 3.2.0 and 3.2.1 where AlphaMode_None
+      // and AlphaMode_Transparent are flipped when choosing a compressor.
+      // See https://github.com/nvpro-samples/nvtt_samples/issues/3
+      if(30200 <= NVTT_VERSION && NVTT_VERSION <= 30201)
+      {
+        if(alphaMode == nvtt::AlphaMode_Transparency)
+        {
+          alphaMode = nvtt::AlphaMode_None;
+        }
+        else
+        {
+          alphaMode = nvtt::AlphaMode_Transparency;
+        }
+      }
+
       image.setAlphaMode(alphaMode);
 
       const int faceCount = multiInputImage ? images.GetFaceCount() : 1;
@@ -840,7 +855,7 @@ int main(int argc, char* argv[])
       const int mip0Width   = image.width();
       const int mip0Height  = image.height();
       const int mip0Depth   = image.depth();
-      int mipmapCount = 1;
+      int       mipmapCount = 1;
       while(mipmapCount < maxMipCount)
       {
         const int nextMip   = mipmapCount + 1;
@@ -866,8 +881,8 @@ int main(int argc, char* argv[])
 
       //// compress procedure
 
-      if(!context.outputHeader(textureType, mip0Width, mip0Height, mip0Depth, mipmapCount,
-                               normal || color2normal, compressionOptions, *outputOptions))
+      if(!context.outputHeader(textureType, mip0Width, mip0Height, mip0Depth, mipmapCount, normal || color2normal,
+                               compressionOptions, *outputOptions))
       {
         fprintf(stderr, "Error writing file header %s.\n", FileList[i].output.string().c_str());
         delete outputOptions;
