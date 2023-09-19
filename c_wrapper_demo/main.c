@@ -27,6 +27,7 @@
 // It loads an image, converts it to a normal map, and then compresses and
 // saves it in a few different ways.
 
+#include <errno.h>
 #include <nvtt/nvtt_wrapper.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -253,8 +254,8 @@ int main(int argc, char** argv)
 #ifdef _MSC_VER
     const errno_t openErrno = fopen_s(&outfile, "c_wrapper_demo_out_normal.dds", "wb");
 #else
-    outfile                 = fopen("c_wrapper_demo_out_normal.dds", "wb");
-    const errno_t openErrno = errno;
+    outfile             = fopen("c_wrapper_demo_out_normal.dds", "wb");
+    const int openErrno = errno;
 #endif
     if(outfile == NULL)
     {
