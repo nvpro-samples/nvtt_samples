@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2007-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * SPDX-FileCopyrightText: Copyright (c) 2007-2021 NVIDIA CORPORATION
+ * SPDX-FileCopyrightText: Copyright (c) 2007-2024 NVIDIA CORPORATION
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -69,14 +69,14 @@ int main(int argc, char* argv[])
       i++;
 
       // !!!UNDONE: Support at least one HDR output format
-
-#ifdef HAVE_PNG
       if(strcmp("png", argv[i]) == 0)
+      {
         savePNG = true;
-      else
-#endif
-          if(strcmp("tga", argv[i]) == 0)
+      }
+      else if(strcmp("tga", argv[i]) == 0)
+      {
         savePNG = false;
+      }
       else
       {
         fprintf(stderr, "Unsupported output format '%s', defaulting to 'tga'.\n", argv[i]);
@@ -195,7 +195,7 @@ int main(int argc, char* argv[])
 
         if(!images.saveImage(name.string().c_str(), f, m))
         {
-          fprintf(stderr, "Error opening '%s' for writting\n", name.string().c_str());
+          fprintf(stderr, "Error opening '%s' for writing\n", name.string().c_str());
           return 1;
         }
       }

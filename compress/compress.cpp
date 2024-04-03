@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2023, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2007-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,13 +13,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * SPDX-FileCopyrightText: Copyright (c) 2007-2023 NVIDIA CORPORATION
+ * SPDX-FileCopyrightText: Copyright (c) 2007-2024 NVIDIA CORPORATION
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #include "utilities.h"
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#include <Windows.h>  // For WideCharToMultiByte
+#endif                // #ifdef _WIN32
+
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <new>
 #include <nvtt/nvtt.h>
@@ -30,22 +44,129 @@
 namespace fs = std::filesystem;
 using Clock  = std::chrono::high_resolution_clock;
 
-struct MyErrorHandler : public nvtt::ErrorHandler
+// Attempts to convert an fs::path to a string in the app's code page (ANSI on
+// Windows, UTF-8 on other systems). Replaces unprintable characters with
+// the system default character. As a last resort, returns an empty string.
+std::string toPrintableString(const fs::path& path)
 {
-  virtual void error(nvtt::Error e)
+  try
   {
-#if _DEBUG
-    nvDebugBreak();
+#ifdef _WIN32
+    // We avoid using <codecvt> here because <codecvt> is deprecated:
+    static_assert(std::is_same_v<fs::path::string_type, std::wstring>);
+    const std::wstring& str = path.native();
+
+    // Get the size of the output:
+    const int ansiCharacters = WideCharToMultiByte(CP_ACP, /* CodePage */
+                                                   WC_COMPOSITECHECK | WC_DEFAULTCHAR | WC_NO_BEST_FIT_CHARS, /* dwFlags */
+                                                   str.c_str(), /* lpWideCharStr */
+                                                   -1,          /* cchWideChar */
+                                                   nullptr,     /* lpMultiByteStr */
+                                                   0,           /* cbMultiByte */
+                                                   nullptr,     /* lpDefaultChar */
+                                                   nullptr);    /* lpUsedDefaultChar */
+    if(ansiCharacters < 0)
+    {
+      fprintf(stderr, "toPrintableString(): WideCharToMultiByte() failed.\n");
+      return {};
+    }
+    // Allocate space:
+    std::string result(static_cast<size_t>(ansiCharacters), 0);
+    // Perform the conversion:
+    std::ignore = WideCharToMultiByte(CP_ACP,                                                    /* CodePage */
+                                      WC_COMPOSITECHECK | WC_DEFAULTCHAR | WC_NO_BEST_FIT_CHARS, /* dwFlags */
+                                      str.c_str(),                                               /* lpWideCharStr */
+                                      -1,                                                        /* cchWideChar */
+                                      result.data(),                                             /* lpMultiByteStr */
+                                      ansiCharacters,                                            /* cbMultiByte */
+                                      nullptr,                                                   /* lpDefaultChar */
+                                      nullptr);                                                  /* lpUsedDefaultChar */
+    return result;
+#else
+    // Linux uses UTF-8 paths and can print UTF-8, so this is easier:
+    return path.string();
 #endif
-    printf("Error: '%s'\n", nvtt::errorString(e));
   }
+  catch(const std::exception& e)
+  {
+    fprintf(stderr, "toPrintableString() threw an unexpected exception: %s\n", e.what());
+    return {};
+  }
+}
+
+// Loads the contents of a file into a buffer. Supports OS paths. Prints and
+// returns an empty vector on failure.
+std::vector<char> loadRawData(const fs::path& path)
+{
+  std::vector<char> result;
+  try
+  {
+    std::ifstream        file(path, std::ios::binary | std::ios::ate);
+    const std::streampos length = file.tellg();
+    if(length < 0)
+    {
+      throw std::logic_error("File length returned by tellg was negative!");
+    }
+    result.resize(length);
+    file.seekg(0);
+    file.read(result.data(), static_cast<std::streamsize>(length));
+  }
+  catch(const std::exception& e)
+  {
+    fprintf(stderr, "Could not read from %s: %s\n", toPrintableString(path).c_str(), e.what());
+  }
+  return result;
+}
+
+// An OutputHandler that uses an std::filesystem::path.
+// This allows us to write to Windows paths that use characters outside of the
+// ANSI character set. (Windows allows UTF-16 plus unpaired surrogates.)
+struct PathOutputHandler : public nvtt::OutputHandler
+{
+private:
+  std::ofstream m_file;
+  fs::path      m_path;
+
+public:
+  PathOutputHandler(const fs::path& path)
+  {
+    m_path = path;
+    try
+    {
+      m_file = std::ofstream(path, std::ios::binary | std::ios::out);
+    }
+    catch(const std::exception& e)
+    {
+      fprintf(stderr, "Could not open %s: %s\n", toPrintableString(path).c_str(), e.what());
+    }
+  }
+
+  void beginImage(int size, int width, int height, int depth, int face, int mipLevel) override {}
+
+  bool writeData(const void* data, int size) override
+  {
+    if(size < 0)
+      return false;
+    try
+    {
+      m_file.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
+    }
+    catch(const std::exception& e)
+    {
+      fprintf(stderr, "Could not write to %s: %s\n", toPrintableString(m_path).c_str(), e.what());
+      return false;
+    }
+    return true;
+  }
+
+  void endImage() override {}
 };
 
 struct FileNamePair
 {
-  fs::path       input;
-  fs::path       output;
-  std::uintmax_t inputSize = 0;
+  fs::path  input;
+  fs::path  output;
+  uintmax_t inputSize = 0;
 };
 
 static void GenFileList(const std::string& inDir, const std::string& outDir, std::vector<FileNamePair>& fileList)
@@ -66,23 +187,6 @@ static void GenFileList(const std::string& inDir, const std::string& outDir, std
   }
 }
 
-static void ClearLists(nvtt::BatchList& batchList, std::vector<nvtt::Surface*>& SurfaceList, std::vector<nvtt::OutputOptions*>& OutputOptionsList)
-{
-  for(unsigned i = 0; i < SurfaceList.size(); i++)
-  {
-    delete SurfaceList[i];
-  }
-  SurfaceList.clear();
-
-  for(unsigned i = 0; i < OutputOptionsList.size(); i++)
-  {
-    delete OutputOptionsList[i];
-  }
-  OutputOptionsList.clear();
-
-  batchList.Clear();
-}
-
 // Tries to read a nonnegative integer from argument i in the argument list.
 // If this fails, prints an error message, leaves the value unchanged,
 // and returns false.
@@ -90,14 +194,15 @@ static bool tryParseInt(int& value, int i, int argc, char* argv[], const char* a
 {
   if(i >= argc)
   {
-    printf("%s was at the end of the argument list; it must be followed by a nonnegative integer.", argumentNameForMessages);
+    fprintf(stderr, "%s was at the end of the argument list; it must be followed by a nonnegative integer.\n", argumentNameForMessages);
     return false;
   }
   char*      end_ptr;
   const long read_value = strtol(argv[i], &end_ptr, 10);
   if(read_value < 0 || read_value >= std::numeric_limits<int>::max() || end_ptr == argv[i])
   {
-    printf("%s was followed by a negative, out-of-range, or unparseable integer (%s).", argumentNameForMessages, argv[i]);
+    fprintf(stderr, "%s was followed by a negative, out-of-range, or unparseable integer (%s).\n",
+            argumentNameForMessages, argv[i]);
     return false;
   }
   value = read_value;
@@ -107,7 +212,7 @@ static bool tryParseInt(int& value, int i, int argc, char* argv[], const char* a
 // Returns true iff argValue is equal to -flagName or --flagName.
 // This makes it so that Texture Tools Exporter command lines
 // (which use --) often work with nvtt_compress, while being compatible with
-// previous nvtt_compress versions (which use
+// previous nvtt_compress versions (which use -.)
 // Both strings must be null-terminated.
 static bool argMatches(const char* flagName, const char* argValue)
 {
@@ -123,13 +228,13 @@ static bool argMatches(const char* flagName, const char* argValue)
 
 int main(int argc, char* argv[])
 {
-  bool alpha            = false;
-  bool alpha_set        = false;
-  bool alpha_dithering  = false;
-  int  alpha_bits       = -1;
-  bool normal           = false;
-  bool color2normal     = false;
-  bool normalizeMipMaps = false;
+  bool          alpha            = false;
+  bool          alpha_set        = false;
+  bool          alpha_dithering  = false;
+  unsigned char alpha_bits       = 0;
+  bool          normal           = false;
+  bool          color2normal     = false;
+  bool          normalizeMipMaps = false;
 
   bool wrapRepeat      = false;
   int  maxMipCount     = std::numeric_limits<int>::max();
@@ -185,10 +290,19 @@ int main(int argc, char* argv[])
       // this doesn't use tryParseInt():
       if(i + 1 < argc)
       {
-        int bits = atoi(argv[i + 1]);
-        if(bits > 0)
+        int                           bits     = strtol(argv[i + 1], nullptr, 10);
+        const constexpr unsigned char max_bits = std::numeric_limits<unsigned char>::max();
+        if(bits < 0 || bits >= max_bits)
         {
-          alpha_bits = bits;
+          fprintf(stderr,
+                  "The number of bits given to "
+                  "alpha_dithering (%s) must be an integer between 1 "
+                  "and %u inclusive.",
+                  argv[i + 1], max_bits);
+        }
+        if(bits != 0)  // Since strtol returns 0 on error
+        {
+          alpha_bits = static_cast<unsigned char>(bits);
           i++;
         }
       }
@@ -240,6 +354,12 @@ int main(int argc, char* argv[])
         mipmapFilter = nvtt::MipmapFilter_Triangle;
       else if(strcmp("kaiser", argv[i]) == 0)
         mipmapFilter = nvtt::MipmapFilter_Kaiser;
+      else if(strcmp("min", argv[i]) == 0)
+        mipmapFilter = nvtt::MipmapFilter_Min;
+      else if(strcmp("max", argv[i]) == 0)
+        mipmapFilter = nvtt::MipmapFilter_Max;
+      else if(strcmp("mitchell-netravali", argv[i]) == 0)
+        mipmapFilter = nvtt::MipmapFilter_Mitchell;
     }
     else if(argMatches("no-mip-gamma-correct", argv[i]))
     {
@@ -455,7 +575,7 @@ int main(int argc, char* argv[])
     }
     else
     {
-      printf("Warning: unrecognized option \"%s\"\n", argv[i]);
+      fprintf(stderr, "Warning: unrecognized option \"%s\"\n", argv[i]);
     }
   }
 
@@ -467,20 +587,18 @@ int main(int argc, char* argv[])
 
   if(!silent)
   {
-    printf("NVIDIA Texture Tools %u.%u.%u - Copyright NVIDIA Corporation 2007 - 2023\n", major, minor, rev);
+    printf("NVIDIA Texture Tools %u.%u.%u - Copyright NVIDIA Corporation 2007 - 2024\n", major, minor, rev);
   }
 
   if(inStr == nullptr)
   {
-    printf("usage: nvtt_compress [options] infile(or dir) [outfile(or dir)]\n\n");
+    printf("usage: %s [options] infile(or dir) [outfile(or dir)]\n\n", argv[0]);
 
     printf("Input options:\n");
     printf("  -color          The input image is a color map (default).\n");
     printf("  -alpha          The input image has an alpha channel used for transparency.\n");
     printf("  -noalpha        The input image has no alpha channel used for transparency.\n");
-    printf(
-        "  -alpha_dithering  Enable alpha dithering. Can be followed by a number indicating the number of bits used in "
-        "alpha dithering.\n");
+    printf("  -alpha_dithering  Enable alpha dithering. Can be followed by a number indicating the number of bits used in alpha dithering.\n");
     printf("  -normal         The input image is a normal map.\n");
     printf("  -tonormal       Convert input to normal map.\n");
     printf("  -clamp          Clamp wrapping mode (default).\n");
@@ -488,16 +606,14 @@ int main(int argc, char* argv[])
     printf("  -nomips         Disable mipmap generation.\n");
     printf("  -max-mip-count  Maximum number of mipmaps. 0 and 1 are the same as -nomips; 2 generates the base mip and one more; and so on.\n");
     printf("  -min-mip-size   Minimum mipmap size; avoids generating mips whose width or height is smaller than this number. (default: 1)\n");
-    printf("  -mipfilter      Mipmap filter. One of the following: box, triangle, kaiser.\n");
+    printf("  -mipfilter      Mipmap filter. One of the following: box, triangle, kaiser, min, max, mitchell-netravali.\n");
     printf("  -no-mip-gamma-correct  Do not convert to linear space when downsampling. (default: only for normal maps)\n");
     printf("  -rgbm           Transform input to RGBM.\n");
     printf("  -rangescale     Scale image to use entire color range.\n");
     printf("  -weight_r       Weight of R channel, default is 1.\n");
     printf("  -weight_g       Weight of G channel, default is 1.\n");
     printf("  -weight_b       Weight of B channel, default is 1.\n");
-    printf(
-        "  -weight_a       Weight of A channel, default is 1 when alpha is used, overwritten to 0 when alpha is not "
-        "used.\n\n");
+    printf("  -weight_a       Weight of A channel, default is 1 when alpha is used, overwritten to 0 when alpha is not used.\n\n");
 
     printf("Compression options:\n");
     printf("  -fast         Fast compression.\n");
@@ -505,7 +621,7 @@ int main(int argc, char* argv[])
     printf("  -highest      Highest-quality compression.\n");
     printf("  -nocuda       Do not use cuda compressor.\n");
     printf("  -rgb          RGBA format\n");
-    printf("  -lumi         LUMINANCE format\n");
+    printf("  -lumi         R channel only\n");
     printf("  -bc1          BC1 format (DXT1)\n");
     printf("  -bc1n         BC1 normal map format (DXT1nm)\n");
     printf("  -bc1a         BC1 format with binary alpha (DXT1a)\n");
@@ -535,8 +651,8 @@ int main(int argc, char* argv[])
 
   if(!fs::exists(fs::path(inStr)))
   {
-    printf("The input directory %s did not exist.\n", inStr);
-    return 0;
+    fprintf(stderr, "The input directory %s did not exist.\n", inStr);
+    return EXIT_FAILURE;
   }
 
   bool isDir = fs::is_directory(fs::path(inStr));
@@ -589,8 +705,8 @@ int main(int argc, char* argv[])
   {
     if(alpha_dithering)
     {
-      int bits = 4;
-      if(alpha_bits > 0)
+      unsigned char bits = 4;
+      if(alpha_bits != 0)
         bits = alpha_bits;
       // Dither alpha when using BC2.
       compressionOptions.setPixelFormat(8, 8, 8, bits);
@@ -657,8 +773,8 @@ int main(int argc, char* argv[])
 
   if(alpha && alpha_dithering && format != nvtt::Format_BC2 && format != nvtt::Format_BC1a)
   {
-    int bits = 8;
-    if(alpha_bits > 0)
+    unsigned char bits = 8;
+    if(alpha_bits != 0)
       bits = alpha_bits;
     compressionOptions.setPixelFormat(8, 8, 8, bits);
     compressionOptions.setQuantization(/*color dithering*/ false, /*alpha dithering*/ true, /*binary alpha*/ false);
@@ -727,27 +843,49 @@ int main(int argc, char* argv[])
   if(timingContext)
     timingContext->SetDetailLevel(3);
 
-  MyErrorHandler errorHandler;
+  // We split apart batches before they get too large.
+  // `batchSizeLimit` limits the total input file size in multi-file batches.
+  // Batch compression is faster than compressing each file one-by-one,
+  // because the GPU can compress all the files in parallel.
+  // However, when there's a lot of data to compress, we might run out of
+  // memory. So, we try to stop before we get to that point.
+  // Note that this method of limiting the total input file size is
+  // imperfect: a PNG file could be small, but contain a lot of pixel data.
+  const uintmax_t batchInputSizeLimit = 104857600;
+  uintmax_t       curBatchInputSize   = 0;
 
-  /// ToDo
-  unsigned long long batchSizeLimit = 104857600;
+  // Windows' C runtime limits the number of open files to 512 by default.
+  // Because the default OutputHandler keeps a file open until it is
+  // destroyed, we limit batches to at most 500 files (we use a value lower
+  // than 512 to provide a safety buffer).
+  const unsigned batchFileLimit = 500;
+  unsigned       curBatchFiles  = 0;
 
-  unsigned long long                curBatchSize = 0;
-  nvtt::BatchList                   batchList;
-  std::vector<nvtt::Surface*>       SurfaceList;
-  std::vector<nvtt::OutputOptions*> OutputOptionsList;
-  std::vector<std::string>          compressingList;
+  nvtt::BatchList                                   batchList;
+  std::vector<std::unique_ptr<nvtt::Surface>>       SurfaceList;
+  std::vector<std::unique_ptr<PathOutputHandler>>   OutputHandlerList;
+  std::vector<std::unique_ptr<nvtt::OutputOptions>> OutputOptionsList;
+  std::vector<std::string>                          compressingList;
 
   unsigned i = 0;
   while(i < FileList.size())
   {
     for(; i < FileList.size(); i++)
     {
-      if(curBatchSize + FileList[i].inputSize > batchSizeLimit && curBatchSize > 0)
+      // Should we split the batch here? A 1-file batch is always OK.
+      if(curBatchInputSize + FileList[i].inputSize > batchInputSizeLimit && curBatchFiles > 0)
+        break;
+      if(curBatchFiles >= batchFileLimit)
         break;
 
-      const fs::path&   input    = FileList[i].input;
-      const std::string inputStr = input.string();
+      const fs::path&   input          = FileList[i].input;
+      const std::string inputPrintable = toPrintableString(input);
+      std::vector<char> inputData      = loadRawData(input);
+      if(inputData.empty())
+      {
+        fprintf(stderr, "Input file '%s' could not be read or was empty.", inputPrintable.c_str());
+        return EXIT_FAILURE;
+      }
 
       nvtt::Surface    image;
       nvtt::SurfaceSet images;
@@ -756,11 +894,17 @@ int main(int argc, char* argv[])
 
       nvtt::TextureType textureType(nvtt::TextureType_2D);
 
-
-      if((maxMipCount > 1) && stringEqualsCaseInsensitive(input.extension().string(), ".dds")
-         && format != nvtt::Format_BC3_RGBM && !rgbm && format != nvtt::Format_BC6U && format != nvtt::Format_BC6S)
+      const bool inputIsDDS = (inputData.size() >= 4   //
+                               && inputData[0] == 'D'  //
+                               && inputData[1] == 'D'  //
+                               && inputData[2] == 'S'  //
+                               && inputData[3] == ' ');
+      if((maxMipCount > 1)                   //
+         && inputIsDDS                       //
+         && format != nvtt::Format_BC3_RGBM  //
+         && !rgbm)
       {
-        if(images.loadDDS(inputStr.c_str()))
+        if(images.loadDDSFromMemory(inputData.data(), inputData.size()))
         {
           textureType = images.GetTextureType();
 
@@ -771,9 +915,9 @@ int main(int argc, char* argv[])
 
       if(image.isNull())
       {
-        if(!image.load(inputStr.c_str(), 0, SNorm, timingContext))
+        if(!image.loadFromMemory(inputData.data(), inputData.size(), nullptr, SNorm, timingContext))
         {
-          fprintf(stderr, "Error opening input file '%s'.\n", inputStr.c_str());
+          fprintf(stderr, "Error opening input file '%s'.\n", inputPrintable.c_str());
           return EXIT_FAILURE;
         }
         textureType = image.type();
@@ -791,7 +935,7 @@ int main(int argc, char* argv[])
         if(rangescale)
         {
           // get color range
-          float min_color[3], max_color[3];
+          float min_color[3]{}, max_color[3]{};
           image.range(0, &min_color[0], &max_color[0], -1, 0.0f, timingContext);
           image.range(1, &min_color[1], &max_color[1], -1, 0.0f, timingContext);
           image.range(2, &min_color[2], &max_color[2], -1, 0.0f, timingContext);
@@ -837,27 +981,33 @@ int main(int argc, char* argv[])
 
       const int faceCount = multiInputImage ? images.GetFaceCount() : 1;
 
-      const int mip0Width   = image.width();
-      const int mip0Height  = image.height();
-      const int mip0Depth   = image.depth();
+      const int mip0Width  = image.width();
+      const int mip0Height = image.height();
+      const int mip0Depth  = image.depth();
+      // How many mipmaps, including the base mip, will we generate?
       int mipmapCount = 1;
       while(mipmapCount < maxMipCount)
       {
-        const int nextMip   = mipmapCount + 1;
+        // Look at the next mipmap's size. Does it satisfy our
+        // constraints?
         const int mipWidth  = std::max(1, mip0Width >> mipmapCount);
         const int mipHeight = std::max(1, mip0Height >> mipmapCount);
-        if((mipWidth == 1 && mipHeight == 1) || (mipWidth < minMipSize) || (mipHeight < minMipSize))
+        if((mipWidth < minMipSize) || (mipHeight < minMipSize))
         {
           break;
         }
-        mipmapCount++;
+        mipmapCount++;  // Accept it.
+        if(mipWidth == 1 && mipHeight == 1)
+        {
+          break;  // Stop generating mips.
+        }
       }
 
-      nvtt::OutputOptions* outputOptions = new nvtt::OutputOptions;
-      outputOptions->setErrorHandler(&errorHandler);
-      outputOptions->setFileName(FileList[i].output.string().c_str());
+      std::unique_ptr<PathOutputHandler>   outputHandler = std::make_unique<PathOutputHandler>(FileList[i].output);
+      std::unique_ptr<nvtt::OutputOptions> outputOptions = std::make_unique<nvtt::OutputOptions>();
+      outputOptions->setOutputHandler(outputHandler.get());
 
-      compressingList.push_back(FileList[i].input.string().c_str());
+      compressingList.push_back(inputPrintable);
 
       if(dds10)
       {
@@ -866,15 +1016,12 @@ int main(int argc, char* argv[])
 
       //// compress procedure
 
-      if(!context.outputHeader(textureType, mip0Width, mip0Height, mip0Depth, mipmapCount,
-                               normal || color2normal, compressionOptions, *outputOptions))
+      if(!context.outputHeader(textureType, mip0Width, mip0Height, mip0Depth, mipmapCount, normal || color2normal,
+                               compressionOptions, *outputOptions))
       {
-        fprintf(stderr, "Error writing file header %s.\n", FileList[i].output.string().c_str());
-        delete outputOptions;
+        fprintf(stderr, "Error writing file header %s.\n", inputPrintable.c_str());
         continue;
       }
-
-      OutputOptionsList.push_back(outputOptions);
 
       // Output images.
       for(int f = 0; f < faceCount; f++)
@@ -909,9 +1056,9 @@ int main(int argc, char* argv[])
         }
 
         context.quantize(tmp, compressionOptions);
-        nvtt::Surface* surf = new nvtt::Surface(tmp);
-        SurfaceList.push_back(surf);
-        batchList.Append(surf, f, 0, outputOptions);
+        std::unique_ptr<nvtt::Surface> surf = std::make_unique<nvtt::Surface>(tmp);
+        batchList.Append(surf.get(), f, 0, outputOptions.get());
+        SurfaceList.push_back(std::move(surf));
 
         for(int m = 1; m < mipmapCount; m++)
         {
@@ -965,29 +1112,44 @@ int main(int argc, char* argv[])
           }
 
           context.quantize(tmp, compressionOptions);
-          nvtt::Surface* surf = new nvtt::Surface(tmp);
-          SurfaceList.push_back(surf);
-          batchList.Append(surf, f, m, outputOptions);
+          std::unique_ptr<nvtt::Surface> surf = std::make_unique<nvtt::Surface>(tmp);
+          batchList.Append(surf.get(), f, m, outputOptions.get());
+          SurfaceList.push_back(std::move(surf));
         }
       }
 
-      curBatchSize += FileList[i].inputSize;
+      OutputHandlerList.push_back(std::move(outputHandler));
+      OutputOptionsList.push_back(std::move(outputOptions));
+      curBatchInputSize += FileList[i].inputSize;
+      curBatchFiles++;
     }
 
     if(compressingList.size() == 0)
       continue;
 
-    printf("Compressing the following files:\n");
-    for(unsigned i = 0; i < compressingList.size(); i++)
+    if(!silent)
     {
-      printf("%s\n", compressingList[i].data());
+      printf("Compressing the following files:\n");
+      for(unsigned i = 0; i < compressingList.size(); i++)
+      {
+        printf("%s\n", compressingList[i].c_str());
+      }
+      printf("\n");
     }
-    printf("\n");
 
-    context.compress(batchList, compressionOptions);
+    const bool compressedOK = context.compress(batchList, compressionOptions);
+    if(!compressedOK)
+    {
+      fprintf(stderr, "Compression failed! Exiting.\n");
+      return EXIT_FAILURE;
+    }
 
-    curBatchSize = 0;
-    ClearLists(batchList, SurfaceList, OutputOptionsList);
+    curBatchInputSize = 0;
+    curBatchFiles     = 0;
+    batchList.Clear();
+    SurfaceList.clear();
+    OutputOptionsList.clear();
+    OutputHandlerList.clear();
     compressingList.clear();
   }
 

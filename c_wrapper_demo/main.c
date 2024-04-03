@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION
  * SPDX-License-Identifier: Apache-2.0
  */
 // Shows how to use some features of NVTT 3's C wrapper. This allows NVTT 3
@@ -263,6 +263,21 @@ int main(int argc, char** argv)
       exitCode = EXIT_FAILURE;
       goto CleanUp;
     }
+#ifdef _MSC_VER
+    // On Windows, the first piece of code that writes to a C file handle also
+    // creates its buffer. In this case, that's normally NVTT. This leads to
+    // an issue where the memory allocator linked inside NVTT created the file
+    // handle's buffer, but external code needs to deallocate that file handle.
+    // To work around it, allocate the buffer here; then we know how to
+    // deallocate it.
+    const int setvbufReturnCode = setvbuf(outfile, NULL, _IOFBF, 1U << 16);
+    if(setvbufReturnCode == -1)
+    {
+      printf("Could not allocate internal buffer for file handle! (Errno %i)\n", errno);
+      exitCode = EXIT_FAILURE;
+      goto CleanUp;
+    }
+#endif
 
     nvttResetOutputOptions(outputOptions);
     nvttSetOutputOptionsFileHandle(outputOptions, outfile);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * SPDX-FileCopyrightText: Copyright (c) 2015-2021 NVIDIA CORPORATION
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2024 NVIDIA CORPORATION
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -42,7 +42,8 @@ inline bool stringEqualsCaseInsensitive(const std::string& a, const std::string&
 }
 
 // Returns the number of seconds from time point `a` to time point `b`.
-template<class TimePoint>
-inline float timeDiff(const TimePoint& a, const TimePoint& b){
-    return std::chrono::duration_cast<std::chrono::duration<float>>(b - a).count();
+template <class TimePoint>
+inline float timeDiff(const TimePoint& a, const TimePoint& b)
+{
+  return std::chrono::duration_cast<std::chrono::duration<float>>(b - a).count();
 }

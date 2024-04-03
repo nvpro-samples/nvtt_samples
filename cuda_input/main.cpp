@@ -49,7 +49,7 @@ bool cudaCheck(cudaError_t result, const char* call, const char* functionName)
 
 int main(int argc, char** argv)
 {
-  bool                 outputToCPU   = false;
+  bool                 outputToGPU   = true;
   nvtt::TimingContext* timingContext = nullptr;
 
   // Parse arguments
@@ -71,7 +71,7 @@ int main(int argc, char** argv)
     }
     else if(strcmp(argv[argIndex], "-c") == 0)
     {
-      outputToCPU = true;
+      outputToGPU = false;
     }
     else if(strcmp(argv[argIndex], "-t") == 0)
     {
@@ -152,40 +152,47 @@ int main(int argc, char** argv)
 
   printf("Compressing cuda_input.raw to BC7 format...\n");
 
-  if(outputToCPU)
-  {
-    // Compress the data using the GPU input and CPU output!
-    char* outputData = new char[outputSizeBytes];
-    nvtt::nvtt_encode_bc7(gpuInput, true /* imageHasAlpha */, outputData, false /* false == output to CPU memory */, timingContext);
+  // NVTT 3.2 unified all its low-level compression APIs using EncodeSettings,
+  // which also makes some things more concise.
+  nvtt::EncodeSettings encodeSettings =
+      nvtt::EncodeSettings().SetFormat(nvtt::Format_BC7).SetTimingContext(timingContext).SetOutputToGPUMem(outputToGPU);
 
-    // Write the output data to a file to give an example of what this creates.
-    // This won't be readable unless we have something like a DDS header or have
-    // knowledge of the format and image dimensions.
-    std::ofstream outFile("out.raw", std::ios::binary);
-    outFile.write(outputData, outputSizeBytes);
-    outFile.close();
-    delete[] outputData;
-  }
-  else
+  if(outputToGPU)
   {
     // Compress the data using both GPU input and output!
     void* d_outputData;
     CUDA_CHECK(cudaMalloc(&d_outputData, outputSizeBytes));
-
-    nvtt::nvtt_encode_bc7(gpuInput, true /* imageHasAlpha */, d_outputData, true /* true == output to GPU memory */, timingContext);
+    if(!nvtt::nvtt_encode(gpuInput, d_outputData, encodeSettings))
+    {
+      fprintf(stderr, "Encoding failed!\n");
+    }
 
     // Write the output data to a file to give an example of what this creates.
     // This won't be readable unless we have something like a DDS header or have
     // knowledge of the format and image dimensions.
-    char* outputData = new char[outputSizeBytes];
-    CUDA_CHECK(cudaMemcpy(outputData, d_outputData, outputSizeBytes, cudaMemcpyDeviceToHost));
+    std::vector<char> outputData(outputSizeBytes);
+    CUDA_CHECK(cudaMemcpy(outputData.data(), d_outputData, outputSizeBytes, cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaFree(d_outputData));
 
     std::ofstream outFile("out.raw", std::ios::binary);
-    outFile.write(outputData, outputSizeBytes);
+    outFile.write(outputData.data(), outputSizeBytes);
     outFile.close();
+  }
+  else
+  {
+    // Compress the data using the GPU input and CPU output!
+    std::vector<char> outputData(outputSizeBytes);
+    if(!nvtt::nvtt_encode(gpuInput, outputData.data(), encodeSettings))
+    {
+      fprintf(stderr, "Encoding failed!\n");
+    }
 
-    delete[] outputData;
+    // Write the output data to a file to give an example of what this creates.
+    // This won't be readable unless we have something like a DDS header or have
+    // knowledge of the format and image dimensions.
+    std::ofstream outFile("out.raw", std::ios::binary);
+    outFile.write(outputData.data(), outputSizeBytes);
+    outFile.close();
   }
 
   CUDA_CHECK(cudaFree(d_inputData));
