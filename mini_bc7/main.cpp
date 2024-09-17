@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024, NVIDIA CORPORATION
  * SPDX-License-Identifier: Apache-2.0
  */
 // Miniature sample showing how to load an image file and use CUDA-accelerated
@@ -26,8 +26,8 @@ int main(int argc, char** argv)
 {
   if(argc != 3)
   {
-    std::cout << "Miniature sample showing how to convert an image to a one-surface BC7-compressed DDS file using "
-                 "nvtt::Surface.\n";
+    std::cout << "nvtt_mini_bc7 - Miniature sample showing how to convert an "
+                 "image to a one-surface BC7-compressed DDS file using nvtt::Surface.\n";
     std::cout << "Usage: nvtt_mini_bc7 infile.png outfile.dds\n";
     return 0;
   }
@@ -53,15 +53,17 @@ int main(int argc, char** argv)
 
   // Write the DDS header. Since this uses the BC7 format, this will
   // automatically use the DX10 DDS extension.
-  if(!context.outputHeader(image, 1 /* number of mipmaps */, compressionOptions, outputOptions)){
-      std::cerr << "Writing the DDS header failed!";
-      return 1;
+  if(!context.outputHeader(image, 1 /* number of mipmaps */, compressionOptions, outputOptions))
+  {
+    std::cerr << "Writing the DDS header failed!";
+    return 1;
   }
 
   // Compress and write the compressed data.
-  if(!context.compress(image, 0 /* face */, 0 /* mipmap */, compressionOptions, outputOptions)){
-      std::cerr << "Compressing and writing the DDS file failed!";
-      return 1;
+  if(!context.compress(image, 0 /* face */, 0 /* mipmap */, compressionOptions, outputOptions))
+  {
+    std::cerr << "Compressing and writing the DDS file failed!";
+    return 1;
   }
 
   return 0;

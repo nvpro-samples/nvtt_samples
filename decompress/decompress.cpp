@@ -104,10 +104,11 @@ int main(int argc, char* argv[])
     }
   }
 
-  printf("NVIDIA Texture Tools - Copyright NVIDIA Corporation 2015 - 2021\n\n");
+  printf("NVIDIA Texture Tools - Copyright NVIDIA Corporation 2007 - 2024\n\n");
 
   if(input.empty())
   {
+    printf("nvtt_decompress - Decompresses a DDS file into TGA or PNG files.\n");
     printf("usage: nvtt_decompress [options] infile.dds [outfile]\n\n");
 
     printf("Note: the .tga or .png extension is forced on outfile\n\n");

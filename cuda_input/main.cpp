@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * SPDX-FileCopyrightText: Copyright (c) 2019-2021 NVIDIA CORPORATION
+ * SPDX-FileCopyrightText: Copyright (c) 2019-2024 NVIDIA CORPORATION
  * SPDX-License-Identifier: Apache-2.0
  */
 // Shows how to use NVTT 3's low-level GPUInputBuffer API to compress a texture
@@ -25,9 +25,17 @@
 // the expense of more cudaDeviceSynchronize() calls.
 
 #include <cuda_runtime.h>
+#include <fstream>
+#include <ios>
+#include <memory>
 #include <nvh/fileoperations.hpp>
 #include <nvpsystem.hpp>
 #include <nvtt/nvtt.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string>
+#include <string.h>
 #include <vector>
 
 bool cudaCheck(cudaError_t result, const char* call, const char* functionName)
@@ -49,8 +57,8 @@ bool cudaCheck(cudaError_t result, const char* call, const char* functionName)
 
 int main(int argc, char** argv)
 {
-  bool                 outputToGPU   = true;
-  nvtt::TimingContext* timingContext = nullptr;
+  bool                                 outputToGPU = true;
+  std::unique_ptr<nvtt::TimingContext> timingContext;
 
   // Parse arguments
   for(int argIndex = 1; argIndex < argc; argIndex++)
@@ -75,7 +83,7 @@ int main(int argc, char** argv)
     }
     else if(strcmp(argv[argIndex], "-t") == 0)
     {
-      timingContext = new nvtt::TimingContext(4);
+      timingContext = std::make_unique<nvtt::TimingContext>(4);
     }
   }
 
@@ -116,9 +124,9 @@ int main(int argc, char** argv)
   }
 
   // Upload the raw data to the GPU
-  void*        d_inputData = nullptr;
-  const size_t inputSizeBytes =
-      size_t(inputImage.width) * size_t(inputImage.height) * size_t(inputImage.num_channels) * sizeof(uint8_t);
+  void*        d_inputData    = nullptr;
+  const size_t inputSizeBytes = static_cast<size_t>(inputImage.width) * static_cast<size_t>(inputImage.height)
+                                * static_cast<size_t>(inputImage.num_channels) * sizeof(uint8_t);
   CUDA_CHECK(cudaMalloc(&d_inputData, inputSizeBytes));
   CUDA_CHECK(cudaMemcpy(d_inputData, reinterpret_cast<const void*>(rawData.data()), inputSizeBytes, cudaMemcpyHostToDevice));
   inputImage.data = d_inputData;
@@ -131,16 +139,16 @@ int main(int argc, char** argv)
   // them all at once, but here we'll only compress one. In particular, it
   // segments the input into tiles for processing, which must be the block size
   // of the input format (4x4 for BC formats, a variable size for ASTC formats).
-  nvtt::GPUInputBuffer gpuInput(&inputImage,             // Array of RefImages
-                                nvtt::ValueType::UINT8,  // The type of the elements of the image
-                                1,                       // Number of RefImages
-                                4, 4,                    // Tile dimensions of BC7
-                                1.0f, 1.0f, 1.0f, 1.0f   // Weights for prioritizing different channels for quality.
+  const nvtt::GPUInputBuffer gpuInput(&inputImage,             // Array of RefImages
+                                      nvtt::ValueType::UINT8,  // The type of the elements of the image
+                                      1,                       // Number of RefImages
+                                      4, 4,                    // Tile dimensions of BC7
+                                      1.0F, 1.0F, 1.0F, 1.0F  // Weights for prioritizing different channels for quality.
   );
 
   // Get the size of the compressed data. Here, we'll use BC7, which must match
   // the low-level encoding function we'll use.
-  size_t outputSizeBytes;
+  std::streamsize outputSizeBytes{};
   {
     nvtt::Context            context;
     nvtt::CompressionOptions options;
@@ -155,7 +163,7 @@ int main(int argc, char** argv)
   // NVTT 3.2 unified all its low-level compression APIs using EncodeSettings,
   // which also makes some things more concise.
   nvtt::EncodeSettings encodeSettings =
-      nvtt::EncodeSettings().SetFormat(nvtt::Format_BC7).SetTimingContext(timingContext).SetOutputToGPUMem(outputToGPU);
+      nvtt::EncodeSettings().SetFormat(nvtt::Format_BC7).SetTimingContext(timingContext.get()).SetOutputToGPUMem(outputToGPU);
 
   if(outputToGPU)
   {
@@ -203,7 +211,6 @@ int main(int argc, char** argv)
   {
     printf("Timing statistics: \n");
     timingContext->PrintRecords();
-    delete timingContext;
   }
 
   return EXIT_SUCCESS;

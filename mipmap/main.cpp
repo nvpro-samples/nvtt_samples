@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024, NVIDIA CORPORATION
  * SPDX-License-Identifier: Apache-2.0
  */
 // Miniature sample showing how to generate mipmaps for an image using NVTT.
@@ -27,19 +27,19 @@
 // This means that if we want to resize images so that they look the same
 // as resizing textures in real life, we must convert from sRGB to a linear
 // color space, resize, then convert back from linear to sRGB.
-// 
+//
 // (You can try this out yourself: in an image editor, create
 // a checkerboard of black and white pixels, then move away from the screen so
 // that the individual pixels are no longer visible. The gray you see should
 // be close to an sRGB gray of 187/255, significantly brighter than 127/255).
-// 
+//
 // To correctly resize an image with transparency, we must also use
 // premultiplied alpha (multiply RGB by A). The reason for this is that
 // "normal" (unpremultiplied or unassociated alpha) RGBA colors cannot be
 // correctly blended without a division somewhere (see e.g. the definition of
 // the Porter-Duff over operator for compositing). Premultiplied alpha colors,
 // however, can be averaged and the results will be mathematically correct.
-// 
+//
 // Here's an example: suppose we want to perform a 50% blend between two RGBA
 // colors, a fully opaque red (1, 0, 0, 1) and an almost invisible color where
 // the RGB channels happen to be painted green (0, 1, 0, 0.0001). If we used
@@ -47,7 +47,7 @@
 // get a half-opaque yellow (0.5, 0.5, 0, 0.50005)! Premultiplied alpha gives
 // the correct result, a half-opaque red with just a bit of green,
 // (1, 0.0001, 0, 0.50005).
-// 
+//
 // This means that before resizing an sRGB image where alpha represents
 // transparency, we should convert to linear, then premultiply alpha,
 // then resize. To convert back, we unpremultiply colors, then convert back
@@ -72,7 +72,7 @@ int main(int argc, char** argv)
 {
   if(argc != 3)
   {
-    std::cout << "Miniature sample showing how to generate mipmaps for an image using NVTT.\n";
+    std::cout << "nvtt_mipmap - Miniature sample showing how to generate mipmaps for an image using NVTT.\n";
     std::cout << "Usage: nvtt_mipmap infile.png outfile.dds\n";
     return 0;
   }
@@ -100,36 +100,40 @@ int main(int argc, char** argv)
   const int numMipmaps = image.countMipmaps();
 
   // Write the DDS header.
-  if (!context.outputHeader(image, numMipmaps, compressionOptions, outputOptions)) {
-      std::cerr << "Writing the DDS header failed!";
-      return 1;
+  if(!context.outputHeader(image, numMipmaps, compressionOptions, outputOptions))
+  {
+    std::cerr << "Writing the DDS header failed!";
+    return 1;
   }
 
-  for(int mip = 0; mip < numMipmaps; mip++){
-      // Compress this image and write its data.
-      if(!context.compress(image, 0 /* face */, mip, compressionOptions, outputOptions)){
-          std::cerr << "Compressing and writing the DDS file failed!";
-          return 1;
-      }
+  for(int mip = 0; mip < numMipmaps; mip++)
+  {
+    // Compress this image and write its data.
+    if(!context.compress(image, 0 /* face */, mip, compressionOptions, outputOptions))
+    {
+      std::cerr << "Compressing and writing the DDS file failed!";
+      return 1;
+    }
 
-      if(mip == numMipmaps - 1) break;
-      
-      // Prepare the next mip:
+    if(mip == numMipmaps - 1)
+      break;
 
-      // Convert to linear premultiplied alpha. Note that toLinearFromSrgb()
-      // will clamp HDR images; consider e.g. toLinear(2.2f) instead.
-      image.toLinearFromSrgb();
-      image.premultiplyAlpha();
+    // Prepare the next mip:
 
-      // Resize the image to the next mipmap size.
-      // NVTT has several mipmapping filters; Box is the lowest-quality, but
-      // also the fastest to use.
-      image.buildNextMipmap(nvtt::MipmapFilter_Box);
-      // For general image resizing. use image.resize().
+    // Convert to linear premultiplied alpha. Note that toLinearFromSrgb()
+    // will clamp HDR images; consider e.g. toLinear(2.2f) instead.
+    image.toLinearFromSrgb();
+    image.premultiplyAlpha();
 
-      // Convert back to unpremultiplied sRGB.
-      image.demultiplyAlpha();
-      image.toSrgb();
+    // Resize the image to the next mipmap size.
+    // NVTT has several mipmapping filters; Box is the lowest-quality, but
+    // also the fastest to use.
+    image.buildNextMipmap(nvtt::MipmapFilter_Box);
+    // For general image resizing. use image.resize().
+
+    // Convert back to unpremultiplied sRGB.
+    image.demultiplyAlpha();
+    image.toSrgb();
   }
 
   return 0;

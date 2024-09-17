@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2007-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * SPDX-FileCopyrightText: Copyright (c) 2007-2021 NVIDIA CORPORATION
+ * SPDX-FileCopyrightText: Copyright (c) 2007-2024 NVIDIA CORPORATION
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -77,8 +77,9 @@ int main(int argc, char* argv[])
 
   if(input0.empty() || input1.empty())
   {
-    printf("NVIDIA Texture Tools - Copyright NVIDIA Corporation 2015 - 2021\n\n");
+    printf("NVIDIA Texture Tools - Copyright NVIDIA Corporation 2007 - 2024\n\n");
 
+    printf("nvtt_imgdiff - Measures difference between two images and optionally writes a difference image.\n");
     printf("usage: nvtt_imgdiff [options] original_file updated_file [output]\n\n");
 
     printf("Diff options:\n");

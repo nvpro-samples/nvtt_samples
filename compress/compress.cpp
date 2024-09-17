@@ -32,13 +32,23 @@
 #endif                // #ifdef _WIN32
 
 #include <algorithm>
+#include <chrono>
+#include <exception>
 #include <filesystem>
 #include <fstream>
+#include <ios>
 #include <limits>
-#include <new>
+#include <memory>
 #include <nvtt/nvtt.h>
+#include <stdexcept>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string>
 #include <string.h>
+#include <tuple>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -128,9 +138,9 @@ private:
   fs::path      m_path;
 
 public:
-  PathOutputHandler(const fs::path& path)
+  explicit PathOutputHandler(const fs::path& path)
+      : m_path(path)
   {
-    m_path = path;
     try
     {
       m_file = std::ofstream(path, std::ios::binary | std::ios::out);
@@ -176,7 +186,7 @@ static void GenFileList(const std::string& inDir, const std::string& outDir, std
     if(!dir_entry.is_regular_file())
       continue;
 
-    fs::path filename = dir_entry.path().filename();
+    const fs::path filename = dir_entry.path().filename();
 
     FileNamePair p1;
     p1.input     = fs::path(inDir) / filename;
@@ -197,7 +207,7 @@ static bool tryParseInt(int& value, int i, int argc, char* argv[], const char* a
     fprintf(stderr, "%s was at the end of the argument list; it must be followed by a nonnegative integer.\n", argumentNameForMessages);
     return false;
   }
-  char*      end_ptr;
+  char*      end_ptr    = nullptr;
   const long read_value = strtol(argv[i], &end_ptr, 10);
   if(read_value < 0 || read_value >= std::numeric_limits<int>::max() || end_ptr == argv[i])
   {
@@ -290,7 +300,7 @@ int main(int argc, char* argv[])
       // this doesn't use tryParseInt():
       if(i + 1 < argc)
       {
-        int                           bits     = strtol(argv[i + 1], nullptr, 10);
+        const int                     bits     = strtol(argv[i + 1], nullptr, 10);
         const constexpr unsigned char max_bits = std::numeric_limits<unsigned char>::max();
         if(bits < 0 || bits >= max_bits)
         {
@@ -592,6 +602,7 @@ int main(int argc, char* argv[])
 
   if(inStr == nullptr)
   {
+    printf("nvtt_compress - Compresses one or more files to DDS, with optional image processing.\n");
     printf("usage: %s [options] infile(or dir) [outfile(or dir)]\n\n", argv[0]);
 
     printf("Input options:\n");
@@ -655,13 +666,13 @@ int main(int argc, char* argv[])
     return EXIT_FAILURE;
   }
 
-  bool isDir = fs::is_directory(fs::path(inStr));
+  const bool isDir = fs::is_directory(fs::path(inStr));
 
   std::vector<FileNamePair> FileList;
   if(isDir)
   {
-    std::string inDir = inStr;
-    std::string outDir;
+    const std::string inDir = inStr;
+    std::string       outDir;
 
     if(outStr)
       outDir = outStr;
@@ -696,7 +707,7 @@ int main(int argc, char* argv[])
   }
 
   // Set input options.
-  nvtt::WrapMode wrapMode = wrapRepeat ? nvtt::WrapMode_Repeat : nvtt::WrapMode_Clamp;
+  const nvtt::WrapMode wrapMode = wrapRepeat ? nvtt::WrapMode_Repeat : nvtt::WrapMode_Clamp;
 
   nvtt::CompressionOptions compressionOptions;
   compressionOptions.setFormat(format);
@@ -821,7 +832,7 @@ int main(int argc, char* argv[])
   const auto startTime = Clock::now();
 
   nvtt::Context context(!nocuda);
-  bool          useCuda     = context.isCudaAccelerationEnabled();
+  const bool    useCuda     = context.isCudaAccelerationEnabled();
   const auto    contextTime = Clock::now();
 
   if(!silent)
@@ -955,7 +966,7 @@ int main(int argc, char* argv[])
           {
             image.scaleBias(i, 1.0f / color_range, 0.0f, timingContext);
           }
-          image.toneMap(nvtt::ToneMapper_Linear, /*parameters=*/NULL, timingContext);  // Clamp without changing the hue.
+          image.toneMap(nvtt::ToneMapper_Linear, /*parameters=*/nullptr, timingContext);  // Clamp without changing the hue.
 
           // Clamp alpha.
           image.clamp(3, 0.0f, 1.0f, timingContext);
@@ -985,7 +996,7 @@ int main(int argc, char* argv[])
       const int mip0Height = image.height();
       const int mip0Depth  = image.depth();
       // How many mipmaps, including the base mip, will we generate?
-      int mipmapCount = 1;
+      int mipmapCount = 0;
       while(mipmapCount < maxMipCount)
       {
         // Look at the next mipmap's size. Does it satisfy our
@@ -1002,6 +1013,8 @@ int main(int argc, char* argv[])
           break;  // Stop generating mips.
         }
       }
+      // mipmapCount can be 0 here if mip 0 was smaller than minMipSize.
+      mipmapCount = std::max(1, mipmapCount);
 
       std::unique_ptr<PathOutputHandler>   outputHandler = std::make_unique<PathOutputHandler>(FileList[i].output);
       std::unique_ptr<nvtt::OutputOptions> outputOptions = std::make_unique<nvtt::OutputOptions>();
@@ -1124,7 +1137,7 @@ int main(int argc, char* argv[])
       curBatchFiles++;
     }
 
-    if(compressingList.size() == 0)
+    if(compressingList.empty())
       continue;
 
     if(!silent)
