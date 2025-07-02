@@ -12,7 +12,7 @@ int main(int n,char**v){if(n==3){nvtt::Surface i;i.load(v[1]);nvtt::Context c(1)
 ```
 
 * [**mipmap**](mipmap) shows how to generate mipmaps from an image, and describes linear-space filtering and premultiplied alpha.
-* [**cuda_input**](cuda_input) shows how to use NVTT 3's low-level `GPUInputBuffer` API to compress a texture directly from a GPU buffer. This API accelerates compression by avoiding CPU-GPU data transfers.
+* [**cuda_input**](cuda_input) shows how to use NVTT 3's low-level `GPUInputBuffer` API to compress a texture directly from a GPU buffer. This API accelerates compression by avoiding CPU-GPU data transfers. It also shows how to use GPU hardware acceleration to decompress textures.
 * [**c_wrapper_demo**](c_wrapper_demo) shows how to use NVTT 3's C wrapper, which allows other compilers and programming languages to use NVTT 3. It covers the high-level and low-level APIs.
 * [**to_slope_space**](to_slope_space) shows how to use `nvtt::Surface::channel()`. It converts a normal map to a slope-space BC5 normal map.
 

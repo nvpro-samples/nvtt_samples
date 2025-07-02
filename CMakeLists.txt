@@ -1,4 +1,4 @@
-#  Copyright (c) 2021-2024, NVIDIA CORPORATION.  All rights reserved.
+#  Copyright (c) 2021-2025, NVIDIA CORPORATION.  All rights reserved.
 # 
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -12,15 +12,24 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 # 
-#  SPDX-FileCopyrightText: Copyright (c) 2021-2024, NVIDIA CORPORATION
+#  SPDX-FileCopyrightText: Copyright (c) 2021-2025, NVIDIA CORPORATION
 #  SPDX-License-Identifier: Apache-2.0
 
 cmake_minimum_required(VERSION 3.10)
 
 get_filename_component(PROJNAME ${CMAKE_CURRENT_SOURCE_DIR} NAME)
-Project(${PROJNAME})
 Message(STATUS "-------------------------------")
 Message(STATUS "Processing Project ${PROJNAME}:")
+Project(${PROJNAME})
+
+include(CheckLanguage)
+enable_language(CXX)
+set(CMAKE_CUDA_STANDARD 17) # Since CMake <= 3.24 doesn't know that CUDA 12 supports C++20
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+  set(CMAKE_CUDA_ARCHITECTURES OFF)
+  enable_language(CUDA)
+endif()
 
 #####################################################################################
 # look for nvpro_core 1) as a sub-folder 2) at some other locations
@@ -45,7 +54,6 @@ endif()
 #
 _add_project_definitions(nvtt_samples)
 _add_package_Cuda()
-_add_nvpro_core_lib()
 
 #####################################################################################
 _find_package_OpenMP()
@@ -53,6 +61,9 @@ if (OPENMP_FOUND)
     set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 endif()
+
+#####################################################################################
+_add_nvpro_core_lib()
 
 #####################################################################################
 # Find NVTT
@@ -80,7 +91,7 @@ if(NOT NVTT_DIR)
   endforeach()
   
   if(NOT NVTT_DIR)
-    message(WARNING "NVTT not found! Please install NVTT from https://developer.nvidia.com/nvidia-texture-tools-exporter and set the CMake NVTT_DIR variable to the folder containing nvtt*.dll (e.g. C:\\Program Files\\NVIDIA Corporation\\NVIDIA Texture Tools).")
+    message(WARNING "NVTT not found! Please install NVTT from https://developer.nvidia.com/nvidia-texture-tools-exporter and set the CMake NVTT_DIR variable to the folder containing nvtt*.${CMAKE_SHARED_LIBRARY_SUFFIX} (e.g. C:\\Program Files\\NVIDIA Corporation\\NVIDIA Texture Tools).")
     return()
   endif()
 endif()
@@ -131,6 +142,7 @@ function(add_nvtt_sample directoryName)
   file(GLOB _SAMPLE_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/${directoryName}/*.c"
     "${CMAKE_CURRENT_LIST_DIR}/${directoryName}/*.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/${directoryName}/*.cu"
     "${CMAKE_CURRENT_LIST_DIR}/${directoryName}/*.h"
   )
   add_executable("${_TARGET_NAME}" "${_SAMPLE_SOURCES}" "${_COMMON_FILES}")
@@ -164,19 +176,16 @@ function(add_nvtt_sample directoryName)
     POST_BUILD
     COMMAND cmake -E copy_if_different "${_NVTT_SL}" "$<TARGET_FILE_DIR:${_TARGET_NAME}>")
   _finalize_target(${_TARGET_NAME})
-  
-  # Remove global definitions from _add_project_definitions for next subproject.
-  remove_definitions(-DPROJECT_NAME -DPROJECT_RELDIRECTORY -DPROJECT_DOWNLOAD_RELDIRECTORY)
 endfunction()
 
 #####################################################################################
 # Add individual samples
 add_nvtt_sample("c_wrapper_demo")
 add_nvtt_sample("compress")
-if(CUDAToolkit_FOUND)
+if(CMAKE_CUDA_COMPILER)
   add_nvtt_sample("cuda_input")
 else()
-  message("Skipping cuda_input sample: CUDA Toolkit not found.")
+  message("Skipping cuda_input sample: CUDA compiler not found.")
 endif()
 add_nvtt_sample("ddsinfo")
 add_nvtt_sample("decompress")
