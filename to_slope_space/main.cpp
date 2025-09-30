@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2025, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,12 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * SPDX-FileCopyrightText: Copyright (c) 2022-2024, NVIDIA CORPORATION
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2025, NVIDIA CORPORATION
  * SPDX-License-Identifier: Apache-2.0
  */
 #include <array>
 #include <iostream>
 #include <nvtt/nvtt.h>
+#include <nvutils/parallel_work.hpp>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -48,26 +49,19 @@ int main(int argc, char** argv)
   // Also note that we don't call image.renomalize() beforehand, since
   // it won't change the result of this step.
   std::array<float*, 3> channels = {image.channel(0), image.channel(1), image.channel(2)};
-  const int64_t         height   = static_cast<int64_t>(image.height());
-  const size_t          width    = static_cast<size_t>(image.width());
-#pragma omp parallel for
-  for(int64_t yi = 0; yi < height; yi++)
-  {
-    for(size_t xi = 0; xi < width; xi++)
-    {
-      const size_t idx = yi * width + xi;
+  const uint64_t        height   = static_cast<uint64_t>(image.height());
+  const uint64_t        width    = static_cast<uint64_t>(image.width());
+  nvutils::parallel_batches<8192>(height * width, [&](uint64_t pixel) {
+    const float z = channels[2][pixel];
+    if(z == 0.0F)
+      return;
+    const float slopeSpaceX = (2.0F * channels[0][pixel] - 1.0F) / z;
+    const float slopeSpaceY = (2.0F * channels[1][pixel] - 1.0F) / z;
 
-      const float z = channels[2][idx];
-      if(z == 0.0F)
-        continue;
-      const float slopeSpaceX = (2.0F * channels[0][idx] - 1.0F) / z;
-      const float slopeSpaceY = (2.0F * channels[1][idx] - 1.0F) / z;
-
-      // Convert back to coordinates centered at 0.5.
-      channels[0][idx] = 0.5F * slopeSpaceX + 0.5F;
-      channels[1][idx] = 0.5F * slopeSpaceY + 0.5F;
-    }
-  }
+    // Convert back to coordinates centered at 0.5.
+    channels[0][pixel] = 0.5F * slopeSpaceX + 0.5F;
+    channels[1][pixel] = 0.5F * slopeSpaceY + 0.5F;
+  });
 
   // Now compress while generating mipmaps. This will be similar to the NVTT
   // mipmap sample.

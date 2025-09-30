@@ -31,8 +31,8 @@
 #include <fstream>
 #include <ios>
 #include <memory>
-#include <nvpsystem.hpp>
 #include <nvtt/nvtt.h>
+#include <nvutils/file_operations.hpp>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -240,16 +240,15 @@ int main(int argc, char** argv)
   inputImage.channel_swizzle[3] = nvtt::Alpha;
   inputImage.channel_interleave = true;
 
-  const std::vector<std::string> searchPaths = {NVPSystem::exePath() + PROJECT_RELDIRECTORY,
-                                                NVPSystem::exePath() + PROJECT_RELDIRECTORY "..",
-                                                NVPSystem::exePath() + PROJECT_RELDIRECTORY "../..",
-                                                NVPSystem::exePath() + PROJECT_NAME};
-  std::vector<char>              rawData;
-  for(const std::string& path : searchPaths)
+  const std::filesystem::path              exeDir      = nvutils::getExecutablePath().parent_path();
+  const std::vector<std::filesystem::path> searchPaths = {exeDir / TARGET_EXE_TO_ROOT_DIRECTORY "/images",
+                                                          exeDir / TARGET_NAME "_files/images"};
+  std::vector<char>                        rawData;
+  for(const std::filesystem::path& path : searchPaths)
   {
     try
     {
-      std::ifstream        file(path + "/cuda_input.raw", std::ios::binary | std::ios::ate);
+      std::ifstream        file(path / "cuda_input.raw", std::ios::binary | std::ios::ate);
       const std::streampos lengthSigned = file.tellg();
       if(lengthSigned > 0)
       {
@@ -266,7 +265,11 @@ int main(int argc, char** argv)
   }
   if(rawData.empty())
   {
-    printf("Error: Could not locate cuda_input.raw!\n");
+    printf("Error: Could not locate cuda_input.raw! Search paths:\n");
+    for (const std::filesystem::path& path : searchPaths)
+    {
+      printf("%s\n", nvutils::utf8FromPath(path).c_str());
+    }
     return EXIT_FAILURE;
   }
 

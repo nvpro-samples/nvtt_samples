@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2024, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2007-2025, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * SPDX-FileCopyrightText: Copyright (c) 2007-2024, NVIDIA CORPORATION
+ * SPDX-FileCopyrightText: Copyright (c) 2007-2025, NVIDIA CORPORATION
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <fileformats/nv_dds.h>
+#include <nvimageformats/nv_dds.h>
 
 #include <array>
 #include <filesystem>
@@ -29,7 +29,7 @@ void print_help()
 {
   // clang-format off
   const char* helpText =
-"NVIDIA Texture Tools - Copyright NVIDIA Corporation 2007 - 2024\n"
+"NVIDIA Texture Tools - Copyright NVIDIA Corporation 2007 - 2025\n"
 "\n"
 "nvtt_detach - Splits a DDS file along layers, faces, and/or mips.\n"
 "\n"
