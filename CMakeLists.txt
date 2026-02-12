@@ -89,6 +89,10 @@ add_nvtt_sample("c_wrapper_demo")
 add_nvtt_sample("compress")
 if(CMAKE_CUDA_COMPILER)
   add_nvtt_sample("cuda_input")
+  # Copy sample images to the install directory.
+  copy_to_runtime_and_install(nvtt_cuda_input
+    LOCAL_DIRS ${CMAKE_CURRENT_LIST_DIR}/images
+  )
 else()
   message("Skipping cuda_input sample: CUDA compiler not found.")
 endif()
@@ -100,9 +104,3 @@ add_nvtt_sample("mini_bc7")
 add_nvtt_sample("mipmap")
 add_nvtt_sample("stitch")
 add_nvtt_sample("to_slope_space")
-
-#####################################################################################
-# Copy sample images to the install directory.
-copy_to_runtime_and_install(nvtt_cuda_input
-  LOCAL_DIRS ${CMAKE_CURRENT_LIST_DIR}/images
-)
